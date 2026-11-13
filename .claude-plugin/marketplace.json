@@ -1,0 +1,14 @@
+{
+  "name": "afterset",
+  "owner": {"name": "Afterset"},
+  "metadata": {"description": "Garmin training, sleep and recovery records for Claude, with reviewable workout corrections."},
+  "plugins": [
+    {
+      "name": "afterset",
+      "source": "./plugin",
+      "description": "Personal Garmin training, sleep, recovery, and reviewable workout corrections.",
+      "license": "AGPL-3.0-or-later",
+      "category": "productivity"
+    }
+  ]
+}

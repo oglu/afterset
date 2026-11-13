@@ -1,0 +1,149 @@
+name: Publish release
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 - <<'PY'
+          import os, re, tomllib
+          from pathlib import Path
+          version = tomllib.load(open('pyproject.toml', 'rb'))['project']['version']
+          if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+              raise SystemExit('Only stable releases are supported by this workflow')
+          if os.environ['RELEASE_TAG'] != f'v{version}':
+              raise SystemExit('Tag must be v followed by the package version')
+          if not re.search(r'^## ' + re.escape(version) + r'(?:\s|$)', Path('CHANGELOG.md').read_text(encoding="utf-8"), re.M):
+              raise SystemExit('Missing changelog entry for release')
+          PY
+
+  checks:
+    needs: validate
+    uses: ./.github/workflows/tests.yml
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - name: Build and inspect Python artifacts
+        run: |
+          uv build --out-dir dist/release
+          uv run --locked python scripts/check-release.py --dist dist/release
+      - name: Set image reference
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+      - name: Log in to GHCR
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build or resume the same release image
+        run: |
+          image_state=$(python3 scripts/check-image.py "$IMAGE")
+          if [ "$image_state" = exists ]; then
+            echo "PUBLISH_IMAGE=false" >> "$GITHUB_ENV"
+            docker pull "$IMAGE"
+            revision=$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+            if [ "$revision" != "$GITHUB_SHA" ]; then
+              echo 'Refusing to replace an image from another commit.' >&2
+              exit 1
+            fi
+          else
+            echo "PUBLISH_IMAGE=true" >> "$GITHUB_ENV"
+            docker build --platform linux/amd64 \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              -t "$IMAGE" .
+          fi
+      - name: Test the release image
+        run: |
+          python3 scripts/check-container.py --image "$IMAGE" --auth bearer
+          python3 scripts/check-container.py --image "$IMAGE" --auth oauth
+          echo "TESTED_IMAGE_ID=$(docker image inspect "$IMAGE" --format '{{.Id}}')" >> "$GITHUB_ENV"
+      - name: Push the tested image
+        if: env.PUBLISH_IMAGE == 'true'
+        run: docker push "$IMAGE"
+      - name: Verify anonymous pull and record digest
+        run: |
+          verify_config=$(mktemp -d)
+          trap 'rm -rf "$verify_config"' EXIT
+          if ! docker --config "$verify_config" pull "$IMAGE"; then
+            echo 'Make the GHCR package public, grant this repository Actions access if needed, then rerun this workflow.' >&2
+            exit 1
+          fi
+          pulled_id=$(docker image inspect "$IMAGE" --format '{{.Id}}')
+          if [ "$pulled_id" != "$TESTED_IMAGE_ID" ]; then
+            echo 'Pulled image differs from the tested image.' >&2
+            exit 1
+          fi
+          digest=$(docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}')
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          python3 scripts/check-container.py --image "$digest" --auth bearer
+          python3 scripts/check-container.py --image "$digest" --auth oauth
+      - name: Prepare checksums
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          directory = Path('dist/release')
+          artifacts = sorted([*directory.glob('*.whl'), *directory.glob('*.tar.gz')])
+          (directory / 'SHA256SUMS').write_text(''.join(
+              f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n' for path in artifacts), encoding='utf-8')
+          PY
+      - name: Attach artifacts to the published release
+        run: |
+          gh release upload "$RELEASE_TAG" dist/release/*.whl dist/release/*.tar.gz dist/release/SHA256SUMS --clobber
+      - name: Add image reference while preserving release notes
+        run: |
+          gh release view "$RELEASE_TAG" --json body --jq '.body // ""' > release-notes.md
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          path = Path('release-notes.md')
+          notes = path.read_text(encoding="utf-8")
+          start = '<!-- afterset-artifacts:start -->'
+          end = '<!-- afterset-artifacts:end -->'
+          block = (
+              f"{start}\n## Downloads\n\n"
+              f"Docker image (Linux amd64): `{os.environ['IMAGE']}`\n\n"
+              f"Pinned image reference:\n\n```text\n{os.environ['IMAGE_DIGEST']}\n```\n\n"
+              f"Python wheel, source archive and checksums are attached.\n{end}"
+          )
+          pattern = re.escape(start) + r'.*?' + re.escape(end)
+          if start in notes and end in notes:
+              notes = re.sub(pattern, lambda _: block, notes, flags=re.S)
+          else:
+              notes = notes.rstrip() + '\n\n' + block
+          path.write_text(notes.rstrip() + '\n', encoding='utf-8')
+          PY
+          gh release edit "$RELEASE_TAG" --notes-file release-notes.md
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io

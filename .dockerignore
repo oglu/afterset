@@ -1,0 +1,12 @@
+# Allow only runtime/build inputs. Never send records or credentials to Docker.
+*
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!afterset/
+!afterset/**
+**/__pycache__/
+**/*.pyc

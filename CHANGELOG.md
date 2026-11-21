@@ -3,7 +3,7 @@
 This file lists notable changes in each release. Versions match the
 `ghcr.io/oglu/afterset` image tags.
 
-## Unreleased
+## 0.3.0 — workout history and comparisons
 
 - Publish an optional latest Docker tag for stable releases without allowing older
   releases to move it backwards. Recommend explicit updates with database backups.

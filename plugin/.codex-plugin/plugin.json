@@ -1,6 +1,6 @@
 {
   "name": "afterset",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "description": "Personal Garmin training, sleep analysis, and reviewable exercise corrections.",
   "license": "AGPL-3.0-or-later",
   "skills": "./skills/",

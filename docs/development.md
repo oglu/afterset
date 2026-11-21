@@ -15,6 +15,10 @@ tests with `uv run pytest -k workout`. Tests use plain assertions, pytest fixtur
 and parametrization. Mocks and patches use Python's `unittest.mock` module.
 The Docker build excludes development dependencies with `--no-dev`.
 
+Workflow linting retains a narrow compatibility exception for the supported
+GitHub Actions `concurrency.queue` field, which actionlint 1.7.12 does not yet
+recognize. Remove that exception when upgrading to a linter that supports it.
+
 Tests use temporary databases and a real MCP stdio client. They cover review/apply/
 restore, stale and cross-session edits, raw-data retention, pagination, input
 validation, partial sync failures, and protocol discovery and tool calls.

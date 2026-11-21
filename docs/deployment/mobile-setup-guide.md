@@ -9,6 +9,9 @@ You need a Garmin account, a Railway account, and a ChatGPT account with access
 to **Add custom MCP server**. Your installation stores its training records and
 Garmin session on your Railway volume.
 
+For updates, follow [Update an existing installation](railway.md#update-an-existing-installation)
+to back up, change the image and verify the replacement.
+
 ## 1. Sign in to Railway
 
 Open [Railway](https://railway.com/dashboard), sign in, and complete any account

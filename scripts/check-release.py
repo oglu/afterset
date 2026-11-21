@@ -84,7 +84,12 @@ def main() -> None:
     candidates = subprocess.check_output(
         ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=ROOT,
     ).decode().split('\0')
+    deleted = set(subprocess.check_output(
+        ['git', 'ls-files', '--deleted', '-z'], cwd=ROOT,
+    ).decode().split('\0'))
     for name in filter(None, candidates):
+        if name in deleted:
+            continue
         check_path(name)
         path = ROOT / name
         if path.is_symlink():

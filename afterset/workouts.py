@@ -8,127 +8,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from typing import Annotated, Any, Literal
-
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
-
-Number = Annotated[float, Field(ge=0, allow_inf_nan=False)]
-Count = Annotated[int, Field(ge=0, strict=True)]
+from typing import Any
 
 
-class Model(BaseModel):
-    model_config = ConfigDict(extra='forbid', revalidate_instances='always')
-
-
-class Evidence(Model):
-    source: Literal['user', 'watch', 'inferred', 'legacy', 'unknown']
-    text: Annotated[str, Field(min_length=1, max_length=4000)]
-    note_ids: Annotated[list[str], Field(max_length=50)] = []
-
-
-class SegmentRef(Model):
-    activity_id: Annotated[int, Field(gt=0, strict=True)]
-    index: Count
-
-
-class Load(Model):
-    kg: Number | None = None
-    basis: Literal['total_external', 'per_hand', 'plates_only', 'added', 'bodyweight', 'unknown'] = 'unknown'
-    implement_count: Annotated[int, Field(gt=0, strict=True)] | None = None
-
-
-class Metrics(Model):
-    power_watts: Number | None = None
-    pace_seconds_per_500m: Number | None = None
-    calories: Number | None = None
-    resistance: Number | None = None
-
-
-class Effort(Model):
-    exercise: Annotated[str, Field(min_length=1, max_length=200)]
-    exercise_key: Annotated[str | None, Field(max_length=200)] = None
-    round: Annotated[int, Field(gt=0, strict=True)] | None = None
-    kind: Literal['working', 'warmup', 'rest', 'unknown', 'excluded'] = 'working'
-    reps: Count | None = None
-    reps_basis: Literal['total', 'per_leg', 'per_arm', 'per_side', 'unknown'] = 'unknown'
-    load: Load | None = None
-    distance_meters: Number | None = None
-    duration_seconds: Number | None = None
-    power_watts: Number | None = None
-    assistance: Annotated[str | None, Field(max_length=500)] = None
-    targets: Metrics = Metrics()
-    reported: Metrics = Metrics()
-    segments: Annotated[list[SegmentRef], Field(max_length=500)] = []
-    evidence: Annotated[str, Field(min_length=1, max_length=4000)]
-    provenance: dict[str, Evidence] = {}
-    details: dict[str, JsonValue] = {}
-
-    @model_validator(mode='after')
-    def unique_segments(self):
-        refs = [(s.activity_id, s.index) for s in self.segments]
-        if len(set(refs)) != len(refs):
-            raise ValueError('An effort cannot repeat the same recording segment')
-        return self
-
-
-class BlockFormat(Model):
-    """Parameters and score of a timed block. Unknown values stay null."""
-    # AMRAP: the time cap. EMOM: the total duration.
-    time_cap_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
-    # EMOM only: 60 for every minute, 120 for every two minutes.
-    interval_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
-    # AMRAP only: full rounds finished, plus reps into the unfinished round.
-    rounds_completed: Count | None = None
-    extra_reps: Count | None = None
-    provenance: dict[str, Evidence] = {}
-
-    @model_validator(mode='after')
-    def known_provenance(self):
-        unknown = set(self.provenance) - {'time_cap_seconds', 'interval_seconds', 'rounds_completed', 'extra_reps'}
-        if unknown:
-            raise ValueError(f'Format provenance names unknown fields: {sorted(unknown)}')
-        if self.interval_seconds is not None and self.time_cap_seconds is not None and self.interval_seconds > self.time_cap_seconds:
-            raise ValueError('An EMOM interval cannot exceed its total duration')
-        return self
-
-
-class Block(Model):
-    kind: Literal['warmup', 'straight_sets', 'superset', 'circuit', 'amrap', 'emom', 'finisher', 'unclassified'] = 'unclassified'
-    label: Annotated[str, Field(min_length=1, max_length=200)]
-    evidence: Evidence
-    format: BlockFormat | None = None
-    efforts: Annotated[list[Effort], Field(max_length=500)]
-
-    @model_validator(mode='after')
-    def format_matches_kind(self):
-        if self.format is None:
-            return self
-        if self.kind not in ('amrap', 'emom'):
-            raise ValueError('Only amrap and emom blocks take a format')
-        if self.kind == 'amrap' and self.format.interval_seconds is not None:
-            raise ValueError('An AMRAP has no interval; use time_cap_seconds')
-        if self.kind == 'emom' and (self.format.rounds_completed is not None or self.format.extra_reps is not None):
-            raise ValueError('An EMOM has no rounds score; record each interval as an effort round')
-        return self
-
-
-class Workout(Model):
-    schema_version: Literal[2] = 2
-    source_activity_ids: Annotated[list[Annotated[int, Field(gt=0, strict=True)]], Field(min_length=1, max_length=20)]
-    blocks: Annotated[list[Block], Field(max_length=100)]
-    warnings: Annotated[list[str], Field(max_length=100)] = []
-
-    @model_validator(mode='after')
-    def bounded_workout(self):
-        if len(set(self.source_activity_ids)) != len(self.source_activity_ids):
-            raise ValueError('Source activity IDs must be unique')
-        if sum(len(b.efforts) for b in self.blocks) > 2000:
-            raise ValueError('A workout supports at most 2000 efforts')
-        for block in self.blocks:
-            for effort in block.efforts:
-                if any(s.activity_id not in self.source_activity_ids for s in effort.segments):
-                    raise ValueError('Segment activity must belong to source_activity_ids')
-        return self
+from .workout_models import *  # Re-export the established model API.
 
 
 SCHEMA = """
@@ -192,7 +75,7 @@ def source_hash(conn: sqlite3.Connection, activity_ids: list[int]) -> str:
     return hashlib.sha256(dumps(values).encode()).hexdigest()
 
 
-def validate_sources(conn: sqlite3.Connection, activity_id: int, workout: Workout) -> None:
+def validate_sources(conn: sqlite3.Connection, activity_id: int, workout: Workout, *, legacy_format_notes: bool = False) -> None:
     if activity_id not in workout.source_activity_ids:
         raise ValueError('The primary activity must belong to source_activity_ids')
     available = {aid: recording(conn, aid) for aid in workout.source_activity_ids}
@@ -203,6 +86,16 @@ def validate_sources(conn: sqlite3.Connection, activity_id: int, workout: Workou
             row = conn.execute('SELECT activity_id FROM session_notes WHERE note_id=?', (note_id,)).fetchone()
             if row is None or row[0] not in workout.source_activity_ids:
                 raise ValueError('Evidence note must belong to a source activity')
+        nested_evidence = []
+        if block.format and not legacy_format_notes:
+            nested_evidence.extend(block.format.provenance.values())
+        if isinstance(block, BlockV3):
+            nested_evidence.extend(group.evidence for group in block.drop_sets)
+        for evidence in nested_evidence:
+            for note_id in evidence.note_ids:
+                row = conn.execute('SELECT activity_id FROM session_notes WHERE note_id=?', (note_id,)).fetchone()
+                if row is None or row[0] not in workout.source_activity_ids:
+                    raise ValueError('Evidence note must belong to a source activity')
         for effort in block.efforts:
             for ref in effort.segments:
                 if ref.index >= len(available[ref.activity_id]):
@@ -247,6 +140,8 @@ def legacy_sets(workout: Workout) -> list[dict]:
                     weight = effort.load.kg
                 elif effort.load.basis == 'per_hand' and effort.load.implement_count is not None:
                     weight = effort.load.kg * effort.load.implement_count
+                elif isinstance(effort.load, LoadV3):
+                    weight = effort.load.total_external_kg()
             reps = effort.reps if effort.reps_basis == 'total' else None
             result.append({'exercise': effort.exercise, 'reps': reps, 'weight_kg': weight,
                            'duration_seconds': effort.duration_seconds,
@@ -274,9 +169,9 @@ def _summary(conn: sqlite3.Connection, activity_id: int, workout: Workout, segme
             'note': 'Effective duration subtracts explicitly excluded whole recording intervals only. It does not retime individual exercises or recalculate heart rate, calories, or training load.'}
 
 
-def save_snapshot(conn: sqlite3.Connection, activity_id: int, revision: int, workout: Workout, source: str, *, replace_raw: bool = False, frozen_from: int | None = None) -> int:
+def save_snapshot(conn: sqlite3.Connection, activity_id: int, revision: int, workout: Workout, source: str, *, replace_raw: bool = False, frozen_from: int | None = None, legacy_format_notes: bool = False) -> int:
     if frozen_from is None:
-        validate_sources(conn, activity_id, workout)
+        validate_sources(conn, activity_id, workout, legacy_format_notes=legacy_format_notes)
         fingerprint = source_hash(conn, workout.source_activity_ids)
     else:
         frozen = conn.execute('SELECT source_hash,summary_json FROM workout_versions WHERE version_id=? AND activity_id=?', (frozen_from, activity_id)).fetchone()
@@ -352,7 +247,7 @@ def read_snapshot(conn: sqlite3.Connection, activity_id: int, revision: int, inc
 def current_snapshot(conn: sqlite3.Connection, activity_id: int, revision: int, include_recording_payload: bool = False) -> dict:
     # Raw snapshots are refreshed transactionally by sync writes and at startup.
     raw_mode = revision == 0 or conn.execute('SELECT 1 FROM set_revisions WHERE activity_id=? AND revision_id=? AND sets_json IS NULL', (activity_id, revision)).fetchone() is not None
-    if raw_mode:
+    if raw_mode and (revision == 0 or conn.execute('SELECT 1 FROM live_raw_revisions WHERE activity_id=? AND revision_id=?', (activity_id, revision)).fetchone() is not None):
         result = read_snapshot(conn, activity_id, 0, include_recording_payload)
         result['revision'] = revision
         return result

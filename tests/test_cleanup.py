@@ -99,9 +99,9 @@ class TestCleanup:
         client = self.client()
         client.get_activities_by_date.return_value = [{'activityId': 7, 'startTimeLocal': '2026-01-01 10:00:00'}]
         client.get_activity_exercise_sets.return_value = {'exerciseSets': [{'repetitionCount': 8}]}
-        client.get_activity.return_value = {'detail': True}
-        client.get_activity_splits.return_value = {'splits': []}
-        client.get_activity_details.return_value = {'samples': []}
+        client.get_activity.return_value = {'activityId': 7}
+        client.get_activity_splits.return_value = {'lapDTOs': []}
+        client.get_activity_details.return_value = {'metricDescriptors': [], 'activityDetailMetrics': []}
         result = self.invoke(['activities', '--start', '2026-01-01', '--end', '2026-01-01', '--enrich'], client)
         assert result.exit_code == 0, result.output
         activity = store.get_activity(7, include=['raw'])

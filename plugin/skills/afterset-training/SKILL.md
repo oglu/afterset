@@ -6,6 +6,12 @@ description: Use Afterset tools to sync Garmin records, correct recorded exercis
 Use the connected Afterset MCP tools. If unavailable, explain that the local server
 and its MCP connection must be running; do not imply the data was queried.
 
+Keep proposal/activity IDs, hashes and revision numbers internal unless the user
+explicitly asks for an audit or troubleshooting. Identify sessions by date and name.
+Use plain statuses: “Note saved,” “Draft ready for review,” “Correction saved,” or
+“Draft needs updating because the workout changed.” A saved note or draft is not
+an applied correction. Claim success only from a successful tool receipt.
+
 ## Data and syncing
 
 For week/month analysis, prefer `training_summary(start, end)` in ranges of at most
@@ -27,6 +33,12 @@ Use `scope=wellness` for daily sleep/recovery; `scope=activities,enrich=true` fo
 running summaries, laps and chart samples. Poll `sync_status` to a terminal state.
 Report partial failures and unavailable data; retry only the failed dates or the
 requested range when warranted. These tools never write corrections to Garmin.
+For selected existing sessions, use `start_activity_enrichment` with their internal
+activity IDs and optional payload kinds. It skips retained data unless
+`refresh=true`; it does not fetch wellness data. Poll `sync_status`. Do not combine
+date selection and activity-ID selection. `enrichment_status` separates supported
+capabilities, latest attempts and retained data. A failed or unsupported refresh
+can coexist with older usable data. Read tools never start a sync implicitly.
 
 ## Correcting a session
 
@@ -35,7 +47,7 @@ verbatim with `save_session_note`; put personal explanations in `save_personal_c
 
 Always cross-check the user's recollection against the recorded activity before
 reconstructing sets or asking them to recall details the activity may contain.
-Read `get_workout` for the structured schema-v2 session: blocks, rounds, efforts,
+Read `get_workout` for the versioned structured session: blocks, rounds, efforts,
 explicit load and repetition conventions, distances, targets/reported metrics,
 per-field provenance, source links and unmapped intervals. Inspect the original
 ordered work/rest intervals, detected reps and exercise candidates as well.
@@ -46,7 +58,9 @@ Use available `get_activity_payload` detail,
 splits and HR samples when they help resolve sequence, rounds, supersets, or
 timer mistakes; follow pagination and align timestamps to local session time.
 Present likely matches with their supporting times/counts, and identify unmatched
-intervals rather than dropping them. Ask focused questions about remaining gaps.
+intervals rather than dropping them. Present recorded counts before asking for
+recall. Batch related questions about material gaps; unknown nonessential fields
+do not block a useful partial reconstruction.
 
 Keep user-confirmed facts, watch-detected values and inferred mappings distinct in
 the proposal's evidence. Neither imperfect Garmin classification nor partial
@@ -65,6 +79,17 @@ AMRAP's time cap and score as `rounds_completed` plus `extra_reps`. Record an
 EMOM's `interval_seconds` and total duration, and number each effort's `round`
 by its interval. The watch's set timings can support the interval pattern, but
 take the score and time cap from the user. Leave unknown format values null.
+For version-3 edits, explicitly request `get_workout(target_schema_version=3)`.
+This converts only the review response, preserving saved history and unknown legacy
+sources. Keep returned block/effort IDs stable. Drop-set groups contain ordered
+effort IDs and evidence; ordinary sets need no extra group. Several drop stages
+can share the same watch interval. Use `plates_per_side` only with explicit side
+count; unknown bar mass means unknown total external mass. Never infer effective
+landmine resistance from plate mass.
+Version 3 stores power and speed under measured, reported or targets as exact,
+approximate or range values. Preserve approximate wording and both range endpoints;
+never invent a midpoint measurement. Attribute newly entered or changed values and
+structure explicitly, and keep legacy conflicts unresolved until clarified.
 Several efforts can share one recording interval; never duplicate its duration
 when computing a session total. Excluded whole intervals need explicit evidence,
 and cannot simultaneously be linked to included effort. Targets and reported
@@ -78,6 +103,16 @@ Call `propose_workout` with the session's current revision and note ID.
 Show the full proposed result and unresolved details. Apply it with `apply_proposal` when the user authorizes that result; a request to draft or describe a session is
 not authorization to commit an unreviewed reconstruction. The tools persist drafts
 and detect stale revisions; reload if another correction intervened.
+Once the user approves the displayed result, apply it without asking again unless
+the content changes. A changed draft needs another review. Keep an internal request
+key for each note/proposal write and reuse it only for a retry of that exact request.
+If a response is lost, inspect the persisted proposal status before claiming the
+write failed or creating another proposal. Use `list_workout_proposals` to resume
+from the session and `get_proposal` for its current status or full review content.
+Use `revise_workout_proposal` to replace one v3 effort or block, with the current
+draft fingerprint, updated provenance and an evidence note. It creates a successor
+and supersedes the old draft atomically. Keep the internal request key for retries.
+Review the changed result before applying it; never apply a superseded draft.
 
 For analysis, prefer the structured `workout` and its effective summary.
 An empty corrected workout is intentional.
@@ -99,11 +134,34 @@ Prefer matched run types and comparable duration, distance and terrain. Distingu
 elapsed time from moving time, and derive pace only when distance and time are
 known and positive. State which time definition is used.
 
+For exercise history use `get_exercise_history`; for two sessions use
+`compare_workouts`. Read their matching and measurement limitations. Repeated
+movements with ambiguous pairing need explicit mappings, not guessed ordering.
+Changed load can remain the same movement; changed or unknown assistance can make
+performance comparisons inconclusive. Keep subjective reports beside measured
+changes with their source. If note excerpts are marked truncated, retrieve the
+full notes with `get_activity` before relying on their wording or completeness.
+Reusing a confirmed prior workout structure never
+authorizes copying its old timestamps, recording links or measured signals.
+
+For activity signals, start with `get_activity_signals` inventory and coverage.
+Request samples only if needed. Pass the returned fingerprint as
+`expected_fingerprint` on later pages; restart if the source changes.
+`compare_activity_heart_rate` compares whole sessions and separates Garmin summary
+values from chart-derived statistics. Missing time/units remain unknown. Check
+covered duration and the returned gap policy: statistics do not fill long gaps,
+infer pauses or recover measurements the watch never recorded. Charts can be
+downsampled; observed extrema are not guaranteed true extrema. No automatic split
+inference or FIT import is available. HR alone cannot identify an exercise.
+
 Calculate comparisons from retrieved records, giving dates, sample counts and
 missingness. Separate observations from hypotheses, and avoid causal claims from
-sleep/training correlations. Training suggestions should account for the user's
-goals, schedule and subjective fatigue; do not infer an injury or medical diagnosis
-from a watch metric. Ask for those details when they materially affect a plan.
+sleep/training correlations. Avoid unsolicited coaching. If the user explicitly
+asks for training advice, the assistant may reason over the records, goals,
+schedule and subjective fatigue; keep that advice separate from recorded facts.
+Never store assistant advice as factual workout data or infer an injury or medical
+diagnosis from a watch metric. Afterset's tools provide descriptive records and
+comparisons, not coaching or medical advice.
 
 
 ## Personal context boundary

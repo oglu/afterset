@@ -3,6 +3,23 @@
 This file lists notable changes in each release. Versions match the
 `ghcr.io/oglu/afterset` image tags.
 
+## Unreleased
+
+- Publish an optional latest Docker tag for stable releases without allowing older
+  releases to move it backwards. Recommend explicit updates with database backups.
+- Resume correction drafts, check whether they were saved, and retry note or
+  proposal writes without duplicates. Replace one effort or block in a reviewed
+  successor draft while preserving the rest of the workout.
+- Record drop-set stages, plates per side and approximate power or speed ranges
+  with version-3 workouts. Existing version-2 records and review history remain
+  available through explicit conversion and historical restore.
+- Retrieve effective exercise history and compare two workouts with matching,
+  source and measurement limitations kept visible.
+- Enrich selected activities, inspect fetch outcomes separately from retained
+  data, and compare whole-session HR with sample coverage and gap handling.
+- Separate the training store into focused modules and guard database writes
+  against unsupported newer schemas.
+
 ## 0.2.9 — first public release
 
 Afterset syncs your Garmin training, sleep and recovery data to a database you

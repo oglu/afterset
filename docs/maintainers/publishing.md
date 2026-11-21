@@ -45,6 +45,24 @@ scan and container smoke tests. After those pass, it:
    and repeats the smoke tests using its digest reference.
 5. Attaches the packages and checksums to your published release and adds a
    Downloads section with the image reference and digest, preserving your notes.
+6. Promotes that tested image to the optional `latest` tag if its version is newer
+   than the image currently carrying that tag. The versioned image stays available.
+
+Publication jobs share a concurrency group so checking and updating `latest`
+cannot race across releases. Versions are compared numerically, not by publication
+date or GitHub's “latest release” designation. Publishing or retrying an older
+release cannot move the tag backwards. A retry of the same image is a no-op;
+a different image with the same version, an unreadable version label or a registry
+error stops promotion. Only an explicitly missing manifest allows initial creation.
+Prereleases never reach publication. Do not move `latest` manually outside this
+workflow. Publication jobs queue instead of replacing an already pending release.
+Promotion copies the tested registry manifest by digest and verifies the resulting
+tag, preserving the exact image rather than rebuilding it.
+
+Recommend specific releases or pinned digests and
+[explicit updates](../deployment/docker.md#update-explicitly) to users. A moving
+tag does not update a running container, and persistent databases need a backup
+before upgrading.
 
 No personal access token or PyPI credential is required. Python packages are
 attached to GitHub Releases; the workflow does not upload them to PyPI or deploy

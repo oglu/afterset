@@ -41,7 +41,7 @@ These scripts in `scripts/` support releases and hosted setups. The sync helper 
 
 | Script | Purpose |
 | --- | --- |
-| `check-image.py` | Classifies registry manifest lookups; errors stop publication rather than authorizing a new image. |
+| `check-image.py` | Classifies registry lookups and promotes tested stable images without moving the latest tag backwards; errors stop publication. |
 | `check-container.py` | Smoke-tests a built image with synthetic data in a disposable volume. CI runs it. |
 | `oauth-container-probe.py` | Runs inside a test container. `check-container.py --auth oauth` calls it. |
 | `sync-range.py` | Runs one MCP-style sync job and waits for it. See [Syncing and analysis](usage.md#sync-data). |

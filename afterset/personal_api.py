@@ -4,6 +4,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import tempfile
+import time
+
+from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout as RequestsTimeout, SSLError as RequestsSSLError
 
 from garmin_personal_api import GarminPersonalApiClient, PersonalApiAuthenticator
 
@@ -12,6 +15,11 @@ from afterset.config import token_store
 
 class PersonalApiRequestError(RuntimeError):
     """A sanitized upstream failure; response bodies and credentials are omitted."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, retryable: bool = False):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 class UnsupportedPersonalApiData(RuntimeError):
@@ -50,8 +58,21 @@ def _request(call, *args, **kwargs):
         return call(*args, **kwargs)
     except Exception as exc:
         status = getattr(exc, 'status_code', None)
-        suffix = f' (HTTP {status})' if isinstance(status, int) else ''
-        raise PersonalApiRequestError('Garmin Personal API request failed' + suffix) from None
+        status = status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None
+        suffix = f' (HTTP {status})' if status is not None else ''
+        retryable = 500 <= status <= 599 if status is not None else isinstance(exc, (TimeoutError, ConnectionError, RequestsTimeout, RequestsConnectionError)) and not isinstance(exc, RequestsSSLError)
+        raise PersonalApiRequestError('Garmin Personal API request failed' + suffix, status_code=status, retryable=retryable) from None
+
+
+def _endpoint_request(call, *args, **kwargs):
+    """Retry transient data requests only; authentication and rate limits do not retry."""
+    for attempt in range(3):
+        try:
+            return _request(call, *args, **kwargs)
+        except PersonalApiRequestError as exc:
+            if not exc.retryable or attempt == 2:
+                raise
+            time.sleep(0.25 * (2 ** attempt))
 
 
 class PersonalApiGarmin:
@@ -70,7 +91,7 @@ class PersonalApiGarmin:
             self._api = GarminPersonalApiClient(token.access_token)
         else:
             self._api.update_bearer_token(token.access_token)
-        return _request(getattr(self._api, method), *args, **kwargs)
+        return _endpoint_request(getattr(self._api, method), *args, **kwargs)
 
     def close(self):
         self._auth.close()

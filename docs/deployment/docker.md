@@ -41,6 +41,26 @@ live local database into another concurrent server. The host must remain running
 no GitHub repository connection. Its volume permissions require a Railway-specific
 UID override documented there.
 
+## Update explicitly
+
+We recommend choosing a specific release and updating deliberately. The optional
+`latest` tag follows the highest stable version successfully promoted by the
+release workflow. It is a moving reference, not automatic container updating.
+Release notes include the image references; use the pinned digest for an exact
+deployment. Prereleases do not update `latest`.
+
+Before updating, read the release notes and follow the
+[backup and upgrade guidance](../configuration.md#backups-and-upgrades).
+Stop the existing container and back up its persistent data. Pull your chosen
+image, remove the stopped container, and recreate it with the same volume,
+environment variables and port settings. Keep the volume; do not delete it.
+Confirm the replacement is healthy before reconnecting clients.
+
+Even when using `latest`, explicitly pull the image and recreate the container.
+Restarting an existing container does not replace its image. Avoid unattended
+updates for a persistent installation: database changes may require a compatible
+backup to roll back.
+
 ## Log in to Garmin
 
 Once the container is healthy, open an interactive login:

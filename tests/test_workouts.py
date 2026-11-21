@@ -112,6 +112,47 @@ class TestWorkout:
         assert restored['recording_segments'] == original['recording_segments']
         assert restored['summary'] == original['summary']
 
+    @pytest.mark.parametrize('historical_raw', [True, False])
+    def test_restore_rejects_missing_historical_snapshot(self, historical_raw):
+        corrected = store.apply_proposal(self.proposal()['proposal_id'])['revision']
+        raw = store.restore_sets(1, 0, corrected, 'Use recording')['revision']
+        target = raw if historical_raw else corrected
+        current = store.restore_sets(1, corrected, raw, 'Use correction')['revision']
+        before = store.get_workout(1)
+        with store.connect() as conn:
+            conn.execute('DELETE FROM workout_versions WHERE activity_id=? AND revision_id=?', (1, target))
+            revision_count = conn.execute('SELECT count(*) FROM set_revisions').fetchone()[0]
+
+        with pytest.raises(ValueError, match='Revision snapshot is unavailable'):
+            store.restore_sets(1, target, current, 'Restore missing snapshot')
+
+        assert store.get_workout(1) == before
+        with store.connect() as conn:
+            assert conn.execute('SELECT count(*) FROM set_revisions').fetchone()[0] == revision_count
+            assert conn.execute('SELECT revision_id FROM set_heads WHERE activity_id=1').fetchone()[0] == current
+
+        # Explicitly choosing the current recording still works without historical snapshots.
+        restored = store.restore_sets(1, 0, current, 'Use current recording')
+        assert restored['revision'] > current
+        assert store.get_activity(1)['source'] == 'garmin'
+
+    def test_read_missing_frozen_head_does_not_substitute_current_recording(self):
+        raw = store.restore_sets(1, 0, 0, 'Use recording')['revision']
+        db.upsert_exercise_sets(1, {'exerciseSets': [{'duration': 20, 'setType': 'ACTIVE'}]})
+        frozen = store.restore_sets(1, raw, raw, 'Use historical recording')['revision']
+        assert store.get_workout(1)['recording_segments'][0]['duration_seconds'] == 30
+        with store.connect() as conn:
+            conn.execute('DELETE FROM workout_versions WHERE activity_id=? AND revision_id=?', (1, frozen))
+
+        with pytest.raises(ValueError, match='Workout revision does not belong to this activity'):
+            store.get_workout(1)
+        with store.connect() as conn:
+            assert conn.execute('SELECT revision_id FROM set_heads WHERE activity_id=1').fetchone()[0] == frozen
+
+        # An explicit choice of the live recording remains a valid recovery.
+        store.restore_sets(1, 0, frozen, 'Use current recording')
+        assert store.get_workout(1)['recording_segments'][0]['duration_seconds'] == 20
+
     def test_proposal_rejects_stale_heads_and_changed_recordings(self):
         a, b = self.proposal(), self.proposal()
         store.apply_proposal(a['proposal_id'])

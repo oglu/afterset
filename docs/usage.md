@@ -31,6 +31,15 @@ requests are reported, successful work is kept, and original set responses are
 retained if a later request fails. Failed wellness endpoint calls do not overwrite
 a day's existing metrics with nulls. Corrections survive all Garmin syncs.
 
+If Garmin rate-limits a request, the job stops making further requests and the CLI
+does not start later backfill chunks. Completed work remains saved. Retry the
+unfinished range later rather than immediately repeating the whole backfill.
+
+For two sessions already in Afterset, your assistant can use targeted activity
+enrichment to fetch missing detail without another wellness sync. Fetch status
+distinguishes the latest attempt from older retained data. See the
+[MCP guide](mcp.md#activity-enrichment-and-signal-coverage).
+
 ## Exploratory analysis
 
 Analysis dependencies are optional; the CLI and MCP installation excludes pandas,

@@ -42,6 +42,11 @@ jobs:
 
   publish:
     needs: checks
+    # Serialize the read/compare/push of the shared latest tag across releases.
+    concurrency:
+      group: afterset-release-publication
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -133,6 +138,9 @@ jobs:
           block = (
               f"{start}\n## Downloads\n\n"
               f"Docker image (Linux amd64): `{os.environ['IMAGE']}`\n\n"
+              f"Optional moving stable tag: `{os.environ['IMAGE'].rsplit(':', 1)[0]}:latest` "
+              f"(updated after successful publication; may point to a newer release). "
+              f"Pull and recreate explicitly to update.\n\n"
               f"Pinned image reference:\n\n```text\n{os.environ['IMAGE_DIGEST']}\n```\n\n"
               f"Python wheel, source archive and checksums are attached.\n{end}"
           )
@@ -144,6 +152,8 @@ jobs:
           path.write_text(notes.rstrip() + '\n', encoding='utf-8')
           PY
           gh release edit "$RELEASE_TAG" --notes-file release-notes.md
+      - name: Advance latest without downgrading
+        run: python3 scripts/check-image.py "$IMAGE_DIGEST" --promote-latest "${RELEASE_TAG#v}"
       - name: Log out of GHCR
         if: always()
         run: docker logout ghcr.io

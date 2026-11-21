@@ -138,6 +138,9 @@ def _sync_range(days: int, start: str | None, end: str | None, scope: str, enric
                 kind = failure.get('kind', 'wellness')
                 typer.echo(f"  {item} ({kind}): {failure['error']}", err=True)
             typer.echo(f"  Inspect job {result['job_id']} with sync_status for failure details.", err=True)
+        if progress.get('rate_limited'):
+            typer.echo('  Garmin rate limit reached; remaining date ranges were not requested. Retry later.', err=True)
+            break
         if chunk_end == end_date:
             break
         current = chunk_end + timedelta(days=1)

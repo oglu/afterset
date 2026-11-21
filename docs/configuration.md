@@ -55,10 +55,30 @@ export AFTERSET_TIMEZONE=Europe/London
 uv run afterset fetch --days 7
 ```
 
-Existing tables and records are retained; new tables are added at server startup.
+## Backups and upgrades
+
+Existing records are retained. The training database has a schema version separate
+from the version of each workout document. Startup applies supported migrations
+transactionally. Updated writers reject databases with a newer schema than they
+understand. Older installed binaries cannot be assumed to make that check: stop
+all old CLI, MCP and hosted workers before upgrading.
+
 SQLite uses WAL mode so reads can proceed during sync writes. For a file copy,
 stop all Afterset processes first and retain any `-wal`/`-shm` sidecars with the
 database. Alternatively, use SQLite's backup API for a consistent live backup.
+
+Make and verify a backup before an upgrade. Include the separate personal-context
+database in your private backup process if you use it, but keep the two databases
+separate. For Docker or Railway, stop old workers and back up the persistent volume
+rather than the container's disposable filesystem.
+
+If migration fails, keep the original database and error details for diagnosis;
+do not delete tables or retry with an older writer. To roll back an application
+upgrade, stop all workers and restore a compatible pre-upgrade backup to a clean
+location, including the matching sidecars when using a file copy. Do not combine
+an older database with newer WAL files. Point the old application at that restored
+location. Restoring a backup loses changes made after the backup, so retain the
+failed/newer database separately until recovery is verified.
 
 ## Personal context
 

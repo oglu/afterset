@@ -136,3 +136,51 @@ class TestPersonalApi:
         self.api.get_activity.assert_called_once_with(1)
         with store.connect() as conn:
             assert conn.execute('select count(*) from activity_exercise_sets_raw').fetchone()[0] == 1
+
+
+def test_endpoint_retries_transient_failures_without_exposing_secrets():
+    from garmin_personal_api.errors import HttpError
+    from requests.exceptions import Timeout
+    from unittest.mock import Mock
+    error = HttpError(status_code=503, method='GET', url='https://example.invalid/secret', response_text='secret response')
+    call = Mock(side_effect=[error, Timeout('private'), {'activityId':1}])
+    with patch.object(p.time, 'sleep') as sleep:
+        assert p._endpoint_request(call) == {'activityId':1}
+    assert call.call_count == 3
+    assert [item.args[0] for item in sleep.call_args_list] == [0.25, 0.5]
+    with patch.object(p.time, 'sleep'):
+        with pytest.raises(p.PersonalApiRequestError) as caught:
+            p._endpoint_request(Mock(side_effect=error))
+    assert caught.value.status_code == 503
+    assert caught.value.retryable is True
+    assert 'secret' not in str(caught.value)
+    assert caught.value.__suppress_context__ is True
+
+
+@pytest.mark.parametrize('status', [401, 403, 404, 429])
+def test_endpoint_does_not_retry_auth_client_errors_or_rate_limit(status):
+    from garmin_personal_api.errors import HttpError
+    from unittest.mock import Mock
+    call = Mock(side_effect=HttpError(status_code=status, method='GET', url='https://example.invalid/secret', response_text='private'))
+    with patch.object(p.time, 'sleep') as sleep:
+        with pytest.raises(p.PersonalApiRequestError) as caught:
+            p._endpoint_request(call)
+    assert call.call_count == 1
+    assert caught.value.status_code == status
+    assert caught.value.retryable is False
+    assert 'secret' not in str(caught.value)
+    sleep.assert_not_called()
+
+
+def test_token_errors_do_not_retry_even_when_transient(tmp_path):
+    from garmin_personal_api.errors import HttpError
+    from unittest.mock import Mock
+    error = HttpError(status_code=503, method='POST', url='https://example.invalid/secret', response_text='private')
+    auth = Mock()
+    auth.obtain_token.side_effect = error
+    with patch.object(p, 'PersonalApiAuthenticator', return_value=auth), patch.object(p.time, 'sleep') as sleep:
+        with pytest.raises(p.PersonalApiRequestError) as caught:
+            p.PersonalApiGarmin('synthetic-key', cache=tmp_path/'bearer.json').get_activity(1)
+    assert caught.value.status_code == 503
+    assert auth.obtain_token.call_count == 1
+    sleep.assert_not_called()

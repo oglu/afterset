@@ -1,12 +1,15 @@
 """Background Garmin sync jobs, persisted for polling over MCP."""
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+from pydantic import Field
 
 import json
 import errno
 import fcntl
 import threading
+
+from afterset.store import payloads
 from datetime import timedelta
 from uuid import uuid4
 
@@ -93,7 +96,9 @@ def _queue_job(start: str, end: str, scope: str, enrich: bool):
         raise
 
 
-def start_sync(start: str, end: str, scope: Literal['activities', 'wellness'] = 'activities', enrich: bool = False) -> dict[str, Any]:
+def start_sync(start: str, end: str, scope: Literal['activities', 'wellness'] = 'activities', enrich: bool = False, activity_ids: None = None) -> dict[str, Any]:
+    if activity_ids is not None:
+        raise ValueError('Date range and activity IDs cannot be combined')
     job_id, request, handle = _queue_job(start, end, scope, enrich)
     try:
         threading.Thread(target=_run, args=(job_id, request, handle), daemon=True).start()
@@ -110,6 +115,49 @@ def run_sync(start: str, end: str, scope: Literal['activities', 'wellness'] = 'w
     job_id, request, handle = _queue_job(start, end, scope, enrich)
     _run(job_id, request, handle, client=client)
     return job_status(job_id)
+
+
+
+_KINDS = ('sets', 'detail', 'splits', 'samples')
+
+
+def start_enrichment(activity_ids: list[Annotated[int, Field(strict=True, gt=0)]], kinds: list[Literal['sets', 'detail', 'splits', 'samples']] | None = None, refresh: bool = False, start: None = None, end: None = None) -> dict[str, Any]:
+    """Start a targeted activity-only enrichment job, skipping retained data unless refreshed."""
+    if start is not None or end is not None:
+        raise ValueError('Date range and activity IDs cannot be combined')
+    if not isinstance(activity_ids, list) or not 1 <= len(activity_ids) <= 50 or any(not isinstance(i, int) or isinstance(i, bool) or i <= 0 for i in activity_ids) or len(set(activity_ids)) != len(activity_ids):
+        raise ValueError('Provide 1..50 unique positive activity IDs')
+    selected = list(_KINDS) if kinds is None else kinds
+    if not isinstance(selected, list) or not selected or any(not isinstance(k, str) or k not in _KINDS for k in selected) or len(set(selected)) != len(selected):
+        raise ValueError('Choose unique payload kinds from sets, detail, splits, samples')
+    with store.connect() as conn:
+        for activity_id in activity_ids:
+            store.require_activity(conn, activity_id)
+    if not _lock.acquire(blocking=False):
+        raise ValueError('A sync is already running; poll its job before starting another')
+    handle = None
+    job_id = None
+    try:
+        handle = _process_lock()
+        job_id = str(uuid4())
+        request = {'activity_ids': activity_ids, 'kinds': selected, 'refresh': refresh, 'scope': 'activities', 'enrich': True}
+        with store.connect() as conn:
+            conn.execute('INSERT INTO sync_jobs(job_id,state,request_json,progress_json) VALUES(?,?,?,?)', (job_id, 'queued', json.dumps(request), '{}'))
+        threading.Thread(target=_run, args=(job_id, request, handle), daemon=True).start()
+    except BaseException:
+        if handle:
+            handle.close()
+        _lock.release()
+        if job_id is not None:
+            _update(job_id, 'failed', {'hint': 'Could not start sync worker; retry.'})
+        raise
+    return {'job_id': job_id, 'state': 'queued', 'hint': 'Poll sync_status until completed, partial, failed, or interrupted.'}
+
+
+def _rate_limited(exc):
+    from garminconnect import GarminConnectTooManyRequestsError
+    from afterset.personal_api import PersonalApiRequestError
+    return isinstance(exc, GarminConnectTooManyRequestsError) or (isinstance(exc, PersonalApiRequestError) and exc.status_code == 429)
 
 
 def _wellness_day(client, day: str, activities: list[dict]) -> None:
@@ -158,39 +206,46 @@ def _run(job_id: str, request: dict, handle=None, *, client=None) -> None:
                 'Recorded exercise sets, lap splits and chart samples are unavailable through this adapter; existing payloads are retained.',
                 'Sleep stages and stress time series are unavailable through this adapter; existing readings are retained.',
             ]
-        start, end = request['start'], request['end']
-        raw = client.get_activities_by_date(start, end)
-        if not isinstance(raw, list):
-            raise ValueError('Unexpected activity list response')
-        db.upsert_activities([fetch._parse_activity(a) for a in raw])
+        targeted = 'activity_ids' in request
+        if targeted:
+            raw = [{'activityId': activity_id} for activity_id in request['activity_ids']]
+        else:
+            start, end = request['start'], request['end']
+            raw = client.get_activities_by_date(start, end)
+            if not isinstance(raw, list):
+                raise ValueError('Unexpected activity list response')
+            db.upsert_activities([fetch._parse_activity(a) for a in raw])
+            for activity in raw:
+                store.store_payload(activity['activityId'], 'summary', activity)
         progress['activities'] = len(raw)
-        for activity in raw:
-            store.store_payload(activity['activityId'], 'summary', activity)
         if request['scope'] == 'activities':
             progress['total_items'] = len(raw)
+            backend = 'personal-api' if isinstance(client, PersonalApiGarmin) else 'connect'
             for activity in raw:
                 activity_id = activity['activityId']
-                if isinstance(client, PersonalApiGarmin):
-                    # Skip data the Personal API never has; `limitations` reports it.
-                    calls = [('detail', client.get_activity)] if request['enrich'] else []
-                else:
-                    calls = [('sets', client.get_activity_exercise_sets)]
-                    if request['enrich']:
-                        calls += [('detail', client.get_activity), ('splits', client.get_activity_splits), ('samples', client.get_activity_details)]
-                for kind, call in calls:
+                kinds = request['kinds'] if targeted else (list(_KINDS) if request['enrich'] else ['sets'])
+                retained = {r['kind'] for r in payloads.enrichment_status(activity_id)['stored']} if targeted and not request['refresh'] else set()
+                for kind in kinds:
+                    if backend == 'personal-api' and kind != 'detail':
+                        payloads.record_outcome(activity_id, kind, backend, 'unsupported')
+                        continue
+                    if kind in retained:
+                        continue
                     try:
+                        call = getattr(client, {'sets': 'get_activity_exercise_sets', 'detail': 'get_activity', 'splits': 'get_activity_splits', 'samples': 'get_activity_details'}[kind])
                         payload = call(activity_id)
-                        if not isinstance(payload, dict):
-                            raise ValueError('Unexpected response')
-                        if kind == 'sets':
-                            db.upsert_exercise_sets(activity_id, payload)
-                        else:
-                            store.store_payload(activity_id, kind, payload)
+                        payloads.save_fetched(activity_id, kind, backend, payload)
                     except Exception as exc:
-                        # Do not persist exception text that may include auth headers.
-                        progress['failures'].append({'activity_id': activity_id, 'kind': kind, 'error': type(exc).__name__})
+                        name = type(exc).__name__
+                        payloads.record_outcome(activity_id, kind, backend, 'failed', error_type=name)
+                        progress['failures'].append({'activity_id': activity_id, 'kind': kind, 'error': name})
+                        if _rate_limited(exc):
+                            progress['rate_limited'] = True
+                            break
                 progress['completed_items'] += 1
                 _update(job_id, 'running', progress)
+                if progress.get('rate_limited'):
+                    break
         else:
             a, b = store.date_range(start, end, 31)
             grouped = fetch._group_activities_by_date(raw)
@@ -201,8 +256,12 @@ def _run(job_id: str, request: dict, handle=None, *, client=None) -> None:
                     _wellness_day(client, day, grouped.get(day, []))
                 except Exception as exc:
                     progress['failures'].append({'date': day, 'error': type(exc).__name__})
+                    if _rate_limited(exc):
+                        progress['rate_limited'] = True
                 progress['completed_items'] += 1
                 _update(job_id, 'running', progress)
+                if progress.get('rate_limited'):
+                    break
         # A long sync may renew again while fetching records.
         from afterset.auth import save_session_tokens
         from afterset.personal_api import PersonalApiGarmin
@@ -211,6 +270,8 @@ def _run(job_id: str, request: dict, handle=None, *, client=None) -> None:
         _update(job_id, 'partial' if progress['failures'] else 'completed', progress)
     except Exception as exc:
         progress['error'] = type(exc).__name__
+        if _rate_limited(exc):
+            progress['rate_limited'] = True
         progress['hint'] = 'Check your configured Garmin login or Personal API key; retry the date range. Existing corrections are retained.'
         _update(job_id, 'failed', progress)
     finally:

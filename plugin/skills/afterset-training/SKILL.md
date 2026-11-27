@@ -111,6 +111,17 @@ paces separate from measured results, and leave unresolved values null.
 Construct a complete structured workout using `propose_workout`, preserving all
 unaffected blocks/efforts with their existing sources. Attribute each new or
 changed field to user, watch or inferred evidence. Keep unknown groupings and unmatched recording intervals visible.
+Use only block and effort kinds in the tool schema; strength is not a block or
+effort kind. In version 3, attribute every new or changed field, including
+`exercise`, `exercise_key`, `kind` (including its default `working`),
+`reps_basis` and `segments`, as well as measurements. Before submitting,
+check each new or changed value against its provenance using the schema's exact
+field names. Keep `exercise_key` null unless an established key is available;
+do not invent one.
+If a proposal or revision is rejected, repair it using the feedback and retry
+with a new request key. A note is not a draft. If approval arrives before a
+draft was shown, first create and show a valid draft for review; do not apply an
+unseen draft or claim the workout was saved.
 Use multiple source activity IDs only when their relationship is established.
 For an AMRAP or EMOM, use block kind `amrap` or `emom` with a `format`. Record an
 AMRAP's time cap and score as `rounds_completed` plus `extra_reps`. Record an

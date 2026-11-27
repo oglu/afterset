@@ -54,6 +54,8 @@ def test_score_requires_order_and_never_marks_semantics_pass():
     assert score('no_save', [{'tool': 'save_session_note', 'outcome': 'error'}], [])['checks']['no_save'] == 'fail'
     assert score('notes_only', [{'tool': 'save_session_note', 'outcome': 'success'},
                                 {'tool': 'propose_workout', 'outcome': 'error'}], [])['checks']['note_only'] == 'fail'
+    assert score('reconstruct', [{'tool': 'propose_workout', 'outcome': 'error'},
+                                 {'tool': 'propose_workout', 'outcome': 'success'}], [])['checks']['no_failed_draft_attempts'] == 'fail'
 
 
 def test_rpc_rejects_server_requests_and_handles_early_completion(tmp_path):

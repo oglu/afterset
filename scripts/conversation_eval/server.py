@@ -94,6 +94,8 @@ def build_server():
             return result
         except BaseException as exc:
             event.update({'outcome': 'error', 'error_type': type(exc).__name__})
+            if name in ('propose_workout', 'revise_workout_proposal') and str(exc).startswith('Draft rejected; this request created no draft.'):
+                event['diagnostic'] = str(exc)[:2000]
             raise
         finally:
             with (root / 'calls.jsonl').open('a', encoding='utf-8') as f:

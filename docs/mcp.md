@@ -87,6 +87,11 @@ ask for an audit or troubleshooting. “Note saved,” “Draft ready for review
 “Correction saved” describe different outcomes. A draft does not change your
 effective workout until you approve it and the apply tool succeeds.
 
+Rejected draft requests return bounded validation feedback. Repair the indicated
+fields and submit a new request with a new request key. A saved note is not a
+structured draft. If no draft has been shown, the assistant prepares and shows one
+for review before asking for approval to apply it.
+
 Use `list_workout_proposals` to find a session's proposals and `get_proposal` to
 check a particular result. Set `include_workout=true` to retrieve the full review.
 An applied proposal stays applied even when a later correction changes the session.

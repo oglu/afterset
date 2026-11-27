@@ -88,6 +88,8 @@ stored review diagnostics. It marks truncation; the full saved revision remains
 available through `get_workout`. Older applied revisions may lack a structured snapshot.
 
 Use `propose_workout` to draft a reconstruction, review it, then call
-`apply_proposal`. Explicitly excluded whole recording intervals can reduce
+`apply_proposal`. If a draft is rejected, its feedback helps repair the request;
+the session note alone is not a structured workout. A draft must be shown for
+review before it can be approved and applied. Explicitly excluded whole recording intervals can reduce
 effective duration. Heart rate, calories and training load are not recalculated;
 those values are flagged for interpretation when an exclusion is present.

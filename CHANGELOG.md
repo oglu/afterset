@@ -3,6 +3,16 @@
 This file lists notable changes in each release. Versions match the
 `ghcr.io/oglu/afterset` image tags.
 
+## 0.4.1 — reliable structured workout drafts
+
+- Clarify that recording exercises, sets and rounds requires a structured draft;
+  a session note alone does not save the workout. Validate the draft before review.
+- Give bounded, actionable feedback for invalid draft fields and missing source
+  evidence. Keep uncertain write outcomes distinct from rejected requests so
+  assistants check saved status before retrying.
+- Log draft failure categories without workout text or health values, and flag
+  rejected draft attempts in synthetic conversation checks even after recovery.
+
 ## 0.4.0 — workout reconstruction and conversation workflows
 
 - Help assistants retrieve personal training records and use targeted sync when

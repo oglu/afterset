@@ -119,5 +119,7 @@ a notes-only request, missing/partial/authentication sync outcomes, and reviewed
 reconstruction followed by a fresh-thread comparison. The evaluator records whether
 it could run each check; it does not automatically grade all wording, authorization
 nuances, comparison interpretations, or every case in the hosted manual matrix.
+The reconstruction case fails if a draft or revision attempt is rejected, even if
+a later attempt succeeds and the workout is saved.
 An infrastructure error or unverified isolation stops that run and returns a nonzero
 exit code. A deterministic case failure also returns a nonzero exit code.

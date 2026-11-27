@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import argparse
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
+from pydantic import BaseModel, ValidationError
+from functools import partial
+import re
+import logging
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from afterset import context, store, sync
@@ -11,6 +16,111 @@ from afterset.store.payloads import enrichment_status
 from afterset.store.signals import compare_activity_heart_rate, get_activity_signals
 from afterset.store.history import compare_workouts, get_exercise_history
 from afterset.store.corrections import revise_workout_proposal
+from afterset import workout_models
+
+
+def _workout_validation_message(error: ValidationError, arguments: dict) -> str:
+    # Pydantic errors contain submitted values and custom messages. Neither is
+    # needed for repair, and both can contain private workout text.
+    fields = {name for value in vars(workout_models).values()
+              if isinstance(value, type) and issubclass(value, BaseModel)
+              for name in value.model_fields}
+    fields.update({'activity_id', 'note_id', 'workout', 'explanation', 'expected_revision',
+                   'request_key', 'proposal_id', 'target_kind', 'target_id', 'replacement',
+                   'expected_fingerprint', 'evidence_note_id'})
+    hints = {'missing': 'required field missing', 'extra_forbidden': 'unknown field',
+             'literal_error': 'invalid choice; check the tool schema for allowed values',
+             'value_error': 'invalid value or missing required provenance; check evidence and field constraints',
+             'int_type': 'must be an integer', 'string_type': 'must be text',
+             'list_type': 'must be a list', 'dict_type': 'must be an object'}
+    details = []
+    errors = error.errors(include_url=False, include_input=False, include_context=False)
+    workout = arguments.get('workout')
+    if isinstance(workout, dict) and workout.get('schema_version', 2) in (2, 3):
+        version = workout.get('schema_version', 2)
+        errors = [e for e in errors if not any(
+            isinstance(p, str) and ('WorkoutV3' in p if version == 2 else p == 'function-after[bounded_workout(), Workout]')
+            for p in e['loc'][1:2])]
+    if arguments.get('target_kind') in ('effort', 'block'):
+        unwanted = 'BlockV3' if arguments['target_kind'] == 'effort' else 'EffortV3'
+        errors = [e for e in errors if not (len(e['loc']) > 1 and e['loc'][0] == 'replacement'
+                  and isinstance(e['loc'][1], str) and unwanted in e['loc'][1])]
+    for item in errors[:8]:
+        path = '.'.join(str(part) if isinstance(part, int) or part in fields else '*'
+                        for part in item['loc'] if not (isinstance(part, str) and part.startswith('function-after[')))[:160]
+        hint = hints.get(item['type'], 'invalid value; check the tool schema and constraints')
+        if item['type'] == 'literal_error' and item['loc'][-1:] == ('kind',):
+            if any(part in ('measured', 'reported', 'targets') for part in item['loc']):
+                hint += '; measurement kinds: exact, approximate, range'
+            elif 'efforts' in item['loc'] or arguments.get('target_kind') == 'effort':
+                hint += '; effort kinds: working, warmup, rest, unknown, excluded'
+            else:
+                hint += '; block kinds: warmup, straight_sets, superset, circuit, amrap, emom, finisher, unclassified'
+        details.append(f'{path}: {hint}')
+    suffix = ' Further errors omitted.' if len(errors) > 8 else ''
+    return 'Draft rejected; this request created no draft. Repair these fields and retry: ' + '; '.join(details) + '.' + suffix
+
+
+_SAFE_WORKOUT_ERRORS = {
+    'Revision changed; reload the session and propose again',
+    'Note does not belong to this activity', 'Evidence note does not belong to this activity',
+    'Unknown source activity ID', 'The primary activity must belong to source_activity_ids',
+    'Evidence note must belong to a source activity', 'Recording segment index does not exist',
+    'A whole recording segment cannot be both excluded and included',
+    'Request key must be nonempty and at most 200 characters',
+    'Request key was already used with different input', 'Unknown proposal',
+    'Only an active draft can be revised', 'Draft is stale; reload the workout before revising',
+    'Draft changed; reload before revising', 'Convert a version 2 workout explicitly before revising',
+    'Replacement must preserve the target ID', 'Target does not identify one item in the draft',
+    'Replacement does not change the draft', 'Provide a nonempty explanation of at most 20000 characters',
+    'Replacement block requires known evidence referencing the note',
+    'Block evidence cannot be downgraded', 'Changed block structure requires known evidence',
+    'Changed block structure requires updated evidence', 'Drop-set evidence cannot be downgraded',
+    'Changed drop-set group requires updated known evidence',
+    'Removing a block format requires updated known block evidence',
+}
+
+
+async def _call_with_workout_feedback(original, name, arguments, context=None, convert_result=False):
+    try:
+        return await original(name, arguments, context=context, convert_result=convert_result)
+    except ToolError as exc:
+        if name not in ('propose_workout', 'revise_workout_proposal'):
+            raise
+        cause = exc.__cause__
+        frames = []
+        trace = cause.__traceback__ if cause else None
+        while trace is not None:
+            frames.append(trace.tb_frame.f_code.co_name)
+            trace = trace.tb_next
+        conversion_failed = 'convert_result' in frames
+        if isinstance(cause, ValidationError) and not conversion_failed:
+            logging.getLogger(__name__).info('workout draft rejected: tool=%s category=schema', name)
+            raise ToolError(_workout_validation_message(cause, arguments)) from None
+        if isinstance(cause, ValueError) and not conversion_failed and name in frames:
+            message = str(cause)
+            if message not in _SAFE_WORKOUT_ERRORS:
+                effort_fields = set(workout_models.EffortV3.model_fields)
+                effort_fields |= {f'{section}.{field}' for section in ('measured', 'reported', 'targets')
+                                  for field in workout_models.MetricsV3.model_fields}
+                format_fields = set(workout_models.BlockFormatV3.model_fields) - {'provenance'}
+                changed = re.fullmatch(r'Changed field ([a-z0-9_.]+) requires (known provenance|updated provenance|user provenance referencing the evidence note)', message)
+                existing = re.fullmatch(r'Existing provenance for ([a-z0-9_.]+) cannot be removed or downgraded', message)
+                format_error = re.fullmatch(r'(?:Changed format field ([a-z_]+) requires (?:known|updated) provenance|Existing format provenance for ([a-z_]+) cannot be removed or downgraded)', message)
+                recognized = ((changed and changed.group(1) in effort_fields)
+                              or (existing and existing.group(1) in effort_fields)
+                              or (format_error and (format_error.group(1) or format_error.group(2)) in format_fields))
+                if recognized:
+                    message += ('. Check all new or changed fields have updated known provenance, including exercise_key, kind '
+                                '(even default working), segments and measurements; use exact field names. '
+                                'Check block evidence and evidence note references; preserve existing sources.')
+                else:
+                    message = None
+            if message is not None:
+                logging.getLogger(__name__).info('workout draft rejected: tool=%s category=validation', name)
+                raise ToolError('Draft rejected; this request created no draft. ' + message) from None
+        logging.getLogger(__name__).warning('workout draft call failed: tool=%s category=uncertain', name)
+        raise ToolError('Could not confirm whether this request saved a draft. Check proposal status before retrying.') from None
 
 INSTRUCTIONS = '''Use Afterset for personal training, sleep and recovery requests, even without an
 app mention. Answer generic fitness questions without personal reads. Respect an explicit
@@ -53,9 +163,19 @@ saved without tool evidence. Do not sync if the user requests cached data only.
 A discussion of a recorded session should inspect the recording and existing workout and
 reconcile the user's account. When structured workout recording intent is established,
 preserve the description and prepare a complete proposal even if no watch value is wrong.
+Recording exercises, sets or rounds requires a structured draft; the note is evidence.
 A notes-only request authorizes the requested note, not a structured proposal. No-save
 prohibits notes and drafts as well as apply. A note write is separate from sync; never
 apply a proposal before review and user authorization.
+If a draft is rejected, repair it using the feedback and retry with a new request
+key. A note is not a draft. If approval arrives before a valid draft was shown,
+create and show the draft for review before seeking authorization to apply it.
+Before proposing or revising, use only block and effort kinds allowed by the schema.
+Effort kinds are working, warmup, rest, unknown and excluded; use working, not work.
+For version 3, check every new or changed field has known provenance under its exact
+field name, including exercise, exercise_key, kind (even default working), reps_basis,
+segments and measurements. Keep exercise_key null unless an established key is available;
+do not invent one. Preserve existing sources.
 For week/month analysis call training_summary(start,end), at most 31 days per call.
 It includes all effective sessions, notes, daily sleep/HRV, missing days and the
 following morning. Sleep uses wake-up date: compare training with the next calendar
@@ -140,6 +260,7 @@ def create_server(transport: str = 'stdio', *, host: str | None = None, port: in
         from afterset.http_auth import http_settings
         options = http_settings(host, port)
     mcp = AftersetMCP('Afterset', instructions=INSTRUCTIONS, stateless_http=True, **options)
+    mcp._tool_manager.call_tool = partial(_call_with_workout_feedback, mcp._tool_manager.call_tool)
     mcp.owner_oauth = options.get('auth_server_provider')
     if mcp.owner_oauth is not None:
         mcp.custom_route('/oauth/consent', methods=['GET', 'POST'])(mcp.owner_oauth.consent)

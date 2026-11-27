@@ -115,6 +115,10 @@ def score(case: str, calls: list[dict], responses: list[str], snapshots: list[di
     names = [c['tool'] for c in successful]
     attempts = [c['tool'] for c in calls]
     findings = {'no_personal_context': 'fail' if any(c['tool'] in ('get_personal_context', 'save_personal_context') for c in calls) else 'pass'}
+    if case == 'reconstruct':
+        findings['no_failed_draft_attempts'] = 'fail' if any(
+            c['tool'] in ('propose_workout', 'revise_workout_proposal') and c.get('outcome') != 'success'
+            for c in calls) else 'pass'
     for check in checks:
         if check == 'read':
             ok = any(target_read(c, require_record=case != 'cache_only') for c in successful)

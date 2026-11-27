@@ -12,7 +12,7 @@ resolution-markers = [
 
 [[package]]
 name = "afterset"
-version = "0.4.1"
+version = "0.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -36,6 +36,7 @@ analysis = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "pytest" },
 ]
 
@@ -58,7 +59,10 @@ requires-dist = [
 provides-extras = ["analysis"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9,<10" }]
+dev = [
+    { name = "jsonschema", specifier = ">=4,<5" },
+    { name = "pytest", specifier = ">=9,<10" },
+]
 
 [[package]]
 name = "annotated-doc"

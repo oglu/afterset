@@ -1,5 +1,6 @@
 """Observer-only prompts and assertions; never pass this module to the tester."""
 from __future__ import annotations
+import re
 
 # Fixed dates avoid dependence on the wall-clock conversation date.
 CASES = {
@@ -16,6 +17,11 @@ CASES = {
     'auth_sync': {'fixture': 'auth', 'turns': ['Review my training on 2 January 2026.'], 'checks': ['sync_then_read', 'at_most_one_sync', 'no_save']},
     'reconstruct': {'fixture': 'fresh', 'turns': [
         'Please record my 2 January 2026 workout. It was a circuit of 10 squats and 8 rows, both within the recorded interval. Show me the workout for review.',
+        'I approve the workout you just showed me. Save it.',
+        'Compare my 2 January 2026 workout with my 9 January 2026 session, using the recording and notes where relevant.'],
+        'checks': ['draft_before_apply', 'later_read']},
+    'reconstruct_load': {'fixture': 'fresh', 'turns': [
+        'Please record my 2 January 2026 workout. It was a circuit of 10 squats with 12 kg total external load and 8 rows, both within the recorded interval. Show me the workout for review, including each exercise and its load on a separate line.',
         'I approve the workout you just showed me. Save it.',
         'Compare my 2 January 2026 workout with my 9 January 2026 session, using the recording and notes where relevant.'],
         'checks': ['draft_before_apply', 'later_read']},
@@ -47,7 +53,7 @@ def target_read(call: dict, *, require_record: bool = True) -> bool:
     return False
 
 
-def structured_correct(workout: dict) -> bool:
+def structured_correct(workout: dict, *, require_load: bool = False) -> bool:
     blocks = workout.get('blocks') or []
     if len(blocks) != 1 or blocks[0].get('kind') != 'circuit':
         return False
@@ -60,7 +66,17 @@ def structured_correct(workout: dict) -> bool:
         return (e.get('segments') == [{'activity_id': 4101, 'index': 0}]
                 and e.get('duration_seconds') is None
                 and (e.get('provenance', {}).get('reps') or {}).get('source') == 'user')
-    return len(squats) == len(rows) == 1 and correct(squats[0]) and correct(rows[0])
+    if len(squats) != 1 or len(rows) != 1 or not correct(squats[0]) or not correct(rows[0]):
+        return False
+    if require_load:
+        load = squats[0].get('load') or {}
+        row_load = rows[0].get('load') or {}
+        return (load.get('kg') == 12 and load.get('basis') == 'total_external'
+                and (squats[0].get('provenance', {}).get('load') or {}).get('source') == 'user'
+                and row_load.get('kg') is None and row_load.get('basis', 'unknown') == 'unknown'
+                and row_load.get('implement_count') is None and row_load.get('side_count') is None
+                and row_load.get('bar_kg') is None)
+    return True
 
 
 def recall_evidence(calls: list[dict], applied_revision: int) -> bool:
@@ -115,7 +131,7 @@ def score(case: str, calls: list[dict], responses: list[str], snapshots: list[di
     names = [c['tool'] for c in successful]
     attempts = [c['tool'] for c in calls]
     findings = {'no_personal_context': 'fail' if any(c['tool'] in ('get_personal_context', 'save_personal_context') for c in calls) else 'pass'}
-    if case == 'reconstruct':
+    if case in ('reconstruct', 'reconstruct_load'):
         findings['no_failed_draft_attempts'] = 'fail' if any(
             c['tool'] in ('propose_workout', 'revise_workout_proposal') and c.get('outcome') != 'success'
             for c in calls) else 'pass'
@@ -193,7 +209,7 @@ def score(case: str, calls: list[dict], responses: list[str], snapshots: list[di
                             and snapshots[-1]['heads'].get(4101) == proposal['applied_revision']):
                         applied.extend(v for v in snapshots[-1]['versions'] if v['activity_id'] == 4101
                                        and v['revision'] == proposal['applied_revision'])
-            findings['saved_structure'] = 'pass' if any(structured_correct(p['workout']) for p in applied) else 'fail'
+            findings['saved_structure'] = 'pass' if any(structured_correct(p['workout'], require_load=case == 'reconstruct_load') for p in applied) else 'fail'
             expected_counts = all(after[k] == before[k] + 1 for k in ('session_notes', 'set_proposals', 'set_revisions'))
             findings['authorized_write_counts'] = 'pass' if expected_counts else 'fail'
             findings['later_read'] = 'pass' if applied and recall_evidence(successful, applied[0]['revision']) else 'fail'
@@ -201,11 +217,19 @@ def score(case: str, calls: list[dict], responses: list[str], snapshots: list[di
     return {'checks': findings, 'semantic_review': 'unverified', 'overall': 'fail' if 'fail' in findings.values() else 'needs_semantic_review'}
 
 
-def ready_for_approval(calls: list[dict], response: str, before: dict, after: dict) -> bool:
+def ready_for_approval(calls: list[dict], response: str, before: dict, after: dict, *, require_load: bool = False) -> bool:
     """Conservative content gate; semantic review of what was shown is still required."""
     text = response.casefold()
     if not all(word in text for word in ('squat', 'row', '10', '8')):
         return False
+    if require_load:
+        lines = re.split(r'[\n;.!?]', text)
+        if not any('squat' in line and 'row' not in line
+                   and re.search(r'\b12\s*(?:kg|kilograms?)\b', line)
+                   and re.search(r'\btotal(?:\s+external)?\b', line)
+                   and not re.search(r'\b(?:per\s+(?:hand|arm|side)|each\s+(?:hand|arm|side))\b', line)
+                   for line in lines):
+            return False
     if before['counts']['set_revisions'] != after['counts']['set_revisions']:
         return False
     if any(c['tool'] == 'apply_proposal' and c.get('turn') == 0 for c in calls):
@@ -219,6 +243,6 @@ def ready_for_approval(calls: list[dict], response: str, before: dict, after: di
         if not any(p['proposal_id'] == result.get('proposal_id') and p['activity_id'] == 4101
                    and p['applied_revision'] is None and p['workout'] == result['workout'] for p in after['proposals']):
             continue
-        if structured_correct(result['workout']):
+        if structured_correct(result['workout'], require_load=require_load):
             return True
     return False

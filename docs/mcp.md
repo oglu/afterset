@@ -72,6 +72,10 @@ as `comparison_conditions` when present.
 Use `get_workout` for the complete document before drafting a correction.
 
 Unknown numeric values remain null. Loads use kilograms with explicit conventions.
+For example, a known 12 kg total external load is `{"kg": 12, "basis": "total_external"}`.
+The `value` and `unit` keys and a `total` basis are not valid load fields. The
+workout and replacement inputs are advertised as objects so Afterset can return
+field-level validation feedback; their contents are still strictly validated.
 An empty corrected workout is intentional; the `source` field distinguishes it
 from an unclassified Garmin recording with no intervals.
 Applying and restoring append revisions rather than deleting history. Applying the

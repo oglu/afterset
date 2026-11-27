@@ -1,5 +1,6 @@
 """Offline tests of the synthetic evaluation observer, never a live Codex run."""
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -24,11 +25,11 @@ def test_synthetic_server_records_calls_and_fake_sync(tmp_path):
                 from afterset.server import INSTRUCTIONS, create_server
                 assert initial.instructions == INSTRUCTIONS
                 exposed = {tool.name: tool for tool in (await session.list_tools()).tools}
-                baseline = create_server()._tool_manager._tools
+                baseline = {tool.name: tool for tool in await create_server().list_tools()}
                 assert set(exposed) == set(baseline)
                 for name, tool in exposed.items():
                     assert tool.description == baseline[name].description
-                    assert tool.inputSchema == baseline[name].parameters
+                    assert tool.inputSchema == baseline[name].inputSchema
                 result = await session.call_tool('start_garmin_sync', {'start': '2026-01-02', 'end': '2026-01-02', 'scope': 'activities'})
                 assert not result.isError
                 job = result.structuredContent['job_id']
@@ -90,6 +91,27 @@ def test_approval_gate_requires_visible_draft_and_no_early_apply():
     before = {'counts': {'set_revisions': 0}}
     after = {'counts': {'set_revisions': 0}, 'proposals': [{'proposal_id': 'p', 'activity_id': 4101, 'applied_revision': None, 'workout': workout}]}
     assert ready_for_approval(draft, 'Review: squat 10, row 8.', before, after)
+    assert not ready_for_approval(draft, 'Review: squat 10, row 8, 12 kg.', before, after, require_load=True)
+    loaded = copy.deepcopy(draft)
+    loaded_squat = loaded[0]['result']['workout']['blocks'][0]['efforts'][0]
+    loaded_squat['load'] = {'kg': 12, 'basis': 'total_external'}
+    loaded_squat['provenance']['load'] = {'source': 'user'}
+    loaded_after = copy.deepcopy(after)
+    loaded_after['proposals'][0]['workout'] = loaded[0]['result']['workout']
+    assert ready_for_approval(loaded, 'Review: squat 10, 12 kg total external; row 8.', before, loaded_after, require_load=True)
+    assert not ready_for_approval(loaded, 'Review: squat 10, row 8.', before, loaded_after, require_load=True)
+    assert not ready_for_approval(loaded, 'Review: squat 10, 12 lb; row 8.', before, loaded_after, require_load=True)
+    assert not ready_for_approval(loaded, 'Review: squat 10; row 8 at 12 kg.', before, loaded_after, require_load=True)
+    assert not ready_for_approval(loaded, '8 rows at 12 kg total external. 10 squats.', before, loaded_after, require_load=True)
+    assert not ready_for_approval(loaded, '10 squats at 12 kg per hand total; 8 rows.', before, loaded_after, require_load=True)
+    fabricated = copy.deepcopy(loaded)
+    fabricated[0]['result']['workout']['blocks'][0]['efforts'][1]['load'] = {'kg': 12, 'basis': 'total_external'}
+    fabricated_after = copy.deepcopy(loaded_after)
+    fabricated_after['proposals'][0]['workout'] = fabricated[0]['result']['workout']
+    assert not ready_for_approval(fabricated, 'Review: squat 10, 12 kg; row 8.', before, fabricated_after, require_load=True)
+    fabricated[0]['result']['workout']['blocks'][0]['efforts'][1]['load'] = {'kg': None, 'basis': 'per_hand'}
+    fabricated_after['proposals'][0]['workout'] = fabricated[0]['result']['workout']
+    assert not ready_for_approval(fabricated, 'Review: squat 10, 12 kg total; row 8.', before, fabricated_after, require_load=True)
     from copy import deepcopy
     extra = deepcopy(draft)
     extra[0]['result']['workout']['blocks'][0]['efforts'].append({'exercise': 'Invented'})

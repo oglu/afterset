@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
@@ -18,6 +19,23 @@ from afterset.store.history import compare_workouts, get_exercise_history
 from afterset.store.corrections import revise_workout_proposal
 from afterset import workout_models
 
+_DRAFT_SHAPE = ('Workout: {"schema_version":2,"source_activity_ids":[1],"blocks":'
+                '[{"kind":"straight_sets","label":"Press","evidence":{"source":"user",'
+                '"text":"Reported","note_ids":["NOTE_ID"]},"efforts":[{"exercise":"Press",'
+                '"reps":4,"load":{"kg":12,"basis":"total_external"},"evidence":"Reported",'
+                '"provenance":{"reps":{"source":"user","text":"Reported","note_ids":["NOTE_ID"]},'
+                '"load":{"source":"user","text":"Reported","note_ids":["NOTE_ID"]}}}]}]}. '
+                'For v3 set schema_version to 3, assign unique stable id strings to blocks and efforts, '
+                'and provide provenance for each new or changed field, for example an effort '
+                '{"id":"e1","exercise":"Press","reps":4,"evidence":"Reported",'
+                '"provenance":{"exercise":{"source":"user","text":"Reported","note_ids":["NOTE_ID"]},'
+                '"kind":{"source":"user","text":"Reported","note_ids":["NOTE_ID"]},'
+                '"reps":{"source":"user","text":"Reported","note_ids":["NOTE_ID"]}}}. '
+                'A replacement is one complete v3 '
+                'effort or block matching target_kind, with its existing id and updated evidence. '
+                'Use kg, not value or unit; select a supported load basis from evidence and leave unknowns null. '
+                'Nested input is strictly validated by Afterset.')
+
 
 def _workout_validation_message(error: ValidationError, arguments: dict) -> str:
     # Pydantic errors contain submitted values and custom messages. Neither is
@@ -29,7 +47,7 @@ def _workout_validation_message(error: ValidationError, arguments: dict) -> str:
                    'request_key', 'proposal_id', 'target_kind', 'target_id', 'replacement',
                    'expected_fingerprint', 'evidence_note_id'})
     hints = {'missing': 'required field missing', 'extra_forbidden': 'unknown field',
-             'literal_error': 'invalid choice; check the tool schema for allowed values',
+             'literal_error': 'invalid choice; use a supported value',
              'value_error': 'invalid value or missing required provenance; check evidence and field constraints',
              'int_type': 'must be an integer', 'string_type': 'must be text',
              'list_type': 'must be a list', 'dict_type': 'must be an object'}
@@ -58,7 +76,10 @@ def _workout_validation_message(error: ValidationError, arguments: dict) -> str:
                 hint += '; block kinds: warmup, straight_sets, superset, circuit, amrap, emom, finisher, unclassified'
         details.append(f'{path}: {hint}')
     suffix = ' Further errors omitted.' if len(errors) > 8 else ''
-    return 'Draft rejected; this request created no draft. Repair these fields and retry: ' + '; '.join(details) + '.' + suffix
+    load_hint = (' Loads use {"kg": 12, "basis": "total_external"} for a known 12 kg total external load; '
+                 'do not use value or unit keys. Use the supported basis that matches the evidence, or unknown.'
+                 if any('load' in e['loc'] for e in errors) else '')
+    return 'Draft rejected; this request created no draft. Repair these fields and retry: ' + '; '.join(details) + '.' + suffix + load_hint
 
 
 _SAFE_WORKOUT_ERRORS = {
@@ -170,8 +191,13 @@ apply a proposal before review and user authorization.
 If a draft is rejected, repair it using the feedback and retry with a new request
 key. A note is not a draft. If approval arrives before a valid draft was shown,
 create and show the draft for review before seeking authorization to apply it.
-Before proposing or revising, use only block and effort kinds allowed by the schema.
+Before proposing or revising, use only supported block and effort kinds. Block kinds
+are warmup, straight_sets, superset, circuit, amrap, emom, finisher and unclassified.
 Effort kinds are working, warmup, rest, unknown and excluded; use working, not work.
+Loads use kg as the numeric field, not value or unit. For example, 12 kg total
+external load is {"kg": 12, "basis": "total_external"}; choose the basis only from
+evidence. Load bases are total_external, per_hand, plates_only, added, bodyweight,
+unknown, and in version 3 also plates_per_side. Unknown weight stays null.
 For version 3, check every new or changed field has known provenance under its exact
 field name, including exercise, exercise_key, kind (even default working), reps_basis,
 segments and measurements. Keep exercise_key null unless an established key is available;
@@ -246,6 +272,23 @@ SYNC = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint
 class AftersetMCP(FastMCP):
     owner_oauth = None
 
+    async def list_tools(self):
+        tools = await super().list_tools()
+        for tool in tools:
+            field = {'propose_workout': 'workout', 'revise_workout_proposal': 'replacement'}.get(tool.name)
+            if field:
+                # Advertise an object at the connector boundary so nested errors reach
+                # our typed validator and its repair feedback. The actual tool model
+                # and all storage validation remain unchanged.
+                schema = copy.deepcopy(tool.inputSchema)
+                schema.pop('$defs', None)
+                schema['properties'][field] = {
+                    'type': 'object', 'additionalProperties': True,
+                    'description': _DRAFT_SHAPE,
+                }
+                tool.inputSchema = schema
+        return tools
+
     def streamable_http_app(self):
         app = super().streamable_http_app()
         if self.owner_oauth is not None:
@@ -270,10 +313,10 @@ def create_server(transport: str = 'stdio', *, host: str | None = None, port: in
         ('list_activities', store.list_activities, READ, 'List paginated activity summaries by local date and optional exact Garmin type.'),
         ('get_activity', store.get_activity, READ, 'Read an effective workout, notes and summary. include=["raw","history","proposals"] opts into audit material; defaults omit them. For reconstruction request raw and get_workout for full provenance.'),
         ('get_workout', store.get_workout, READ, 'Read the full structured workout, provenance, recording links and summary. Optional revision reads history; include_recording_payload retrieves frozen original intervals. target_schema_version=3 returns an explicit converted review document without changing saved history.'),
-        ('propose_workout', store.propose_workout, WRITE, 'Draft a complete structured workout with blocks, efforts, sources, conventions and evidence. Review diagnostics and the complete workout; no conflicts does not prove completeness. Show it for review, then apply_proposal after authorization.'),
+        ('propose_workout', store.propose_workout, WRITE, 'Draft a complete structured workout for review, then apply_proposal after authorization. ' + _DRAFT_SHAPE),
         ('get_proposal', store.get_proposal, READ, 'Read compact proposal status and whether its source is still current. Set include_workout=true for the complete review. Keep IDs and revisions internal in ordinary replies.'),
         ('list_workout_proposals', store.list_workout_proposals, READ, 'Find paginated proposal statuses for a workout when resuming a correction. Draft and applied states are distinct from freshness.'),
-        ('revise_workout_proposal', revise_workout_proposal, WRITE, 'Replace one identified v3 effort or block in a successor draft. Preserve unaffected content and provide updated field evidence. Use the expected draft fingerprint and reuse request_key only for an identical retry. Review changed content before applying.'),
+        ('revise_workout_proposal', revise_workout_proposal, WRITE, 'Replace one identified v3 effort or block in a successor draft. Use the expected fingerprint and reuse request_key only for an identical retry. Review changed content before applying. ' + _DRAFT_SHAPE),
         ('get_exercise_history', get_exercise_history, READ, 'Read bounded, paginated exercise history from effective workouts, with conventions, conditions and training notes. Personal context is not read.'),
         ('compare_workouts', compare_workouts, READ, 'Compare exactly two effective workouts. Match only established movement keys or explicit mappings; retain changed loads and show metric-specific limitations. Ambiguous matches stay unresolved.'),
         ('get_activity_payload', store.get_payload, READ, 'Read paginated original summary, detail, splits or samples. Descriptors define sample units.'),

@@ -121,5 +121,7 @@ it could run each check; it does not automatically grade all wording, authorizat
 nuances, comparison interpretations, or every case in the hosted manual matrix.
 The reconstruction case fails if a draft or revision attempt is rejected, even if
 a later attempt succeeds and the workout is saved.
+The `reconstruct_load` case also checks a reported total external load and its
+user provenance in the reviewed draft and saved workout.
 An infrastructure error or unverified isolation stops that run and returns a nonzero
 exit code. A deterministic case failure also returns a nonzero exit code.

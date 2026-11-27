@@ -3,6 +3,15 @@
 This file lists notable changes in each release. Versions match the
 `ghcr.io/oglu/afterset` image tags.
 
+## 0.4.2 — connector-safe workout validation
+
+- Let nested workout and replacement objects reach Afterset's strict validator,
+  so connector validation no longer hides field-level repair feedback.
+- Show canonical workout, evidence and load examples to connected assistants.
+  Reject invalid load fields without guessing or silently converting them.
+- Check the connector-facing schema and repaired saves over MCP. Add a loaded
+  workout conversation case with a conservative review and approval gate.
+
 ## 0.4.1 — reliable structured workout drafts
 
 - Clarify that recording exercises, sets and rounds requires a structured draft;

@@ -17,6 +17,9 @@ Ordinary sets do not need a group. Each stage keeps its own reps and load; a gro
 does not add another copy of those measurements or their duration. Several stages
 may share a watch interval without dividing it into invented timestamps.
 
+Loads use kilograms and an explicit basis. For example, a known 12 kg total
+external load uses `{"kg": 12, "basis": "total_external"}`. An unknown weight
+stays null, and an uncertain basis stays `unknown`.
 Loads can use `plates_per_side`, with `side_count` and optional `bar_kg`. If the bar
 mass is unknown, total external mass stays unknown. An empty bar is not zero load.
 Per-hand and total external loads remain separate conventions. Plate mass is not

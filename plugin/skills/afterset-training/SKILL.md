@@ -111,8 +111,15 @@ paces separate from measured results, and leave unresolved values null.
 Construct a complete structured workout using `propose_workout`, preserving all
 unaffected blocks/efforts with their existing sources. Attribute each new or
 changed field to user, watch or inferred evidence. Keep unknown groupings and unmatched recording intervals visible.
-Use only block and effort kinds in the tool schema; strength is not a block or
-effort kind. In version 3, attribute every new or changed field, including
+For a known 12 kg total external load, use `{"kg": 12, "basis": "total_external"}`.
+Do not use `value` or `unit` keys, or the basis `total`. Load bases are
+`total_external`, `per_hand`, `plates_only`, `added`, `bodyweight`, `unknown`,
+and in version 3 also `plates_per_side`. Select a basis only when supported by
+evidence; unknown weight remains null. Nested input reaches Afterset for strict
+validation and actionable feedback before any draft is saved.
+Use supported kinds: blocks use `warmup`, `straight_sets`, `superset`, `circuit`,
+`amrap`, `emom`, `finisher` or `unclassified`; efforts use `working`, `warmup`,
+`rest`, `unknown` or `excluded`. In version 3, attribute every new or changed field, including
 `exercise`, `exercise_key`, `kind` (including its default `working`),
 `reps_basis` and `segments`, as well as measurements. Before submitting,
 check each new or changed value against its provenance using the schema's exact

@@ -183,10 +183,10 @@ def run_case(case: str, model: str, timeout: int, codex: str) -> dict:
             thread_id = started['thread']['id']
             stopped = None
             for index, prompt in enumerate(CASES[case]['turns']):
-                if case == 'reconstruct' and index == 1 and not ready_for_approval(calls, responses[0], snapshots[0], snapshots[1]):
+                if case in ('reconstruct', 'reconstruct_load') and index == 1 and not ready_for_approval(calls, responses[0], snapshots[0], snapshots[1], require_load=case == 'reconstruct_load'):
                     stopped = 'Approval withheld: no sufficiently visible draft; semantic review still required.'
                     break
-                if case == 'reconstruct' and index == 2:
+                if case in ('reconstruct', 'reconstruct_load') and index == 2:
                     recall, _ = new_thread()
                     thread_id = recall['thread']['id']
                 stage = f'turn_{index}'

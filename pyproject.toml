@@ -1,6 +1,6 @@
 [project]
 name = "afterset"
-version = "0.4.1"
+version = "0.4.2"
 description = "Personal Garmin training, sleep, and recovery records"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -48,6 +48,7 @@ include = [
 
 [dependency-groups]
 dev = [
+    "jsonschema>=4,<5",
     "pytest>=9,<10",
 ]
 

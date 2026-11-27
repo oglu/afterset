@@ -6,6 +6,7 @@ import sys
 from unittest.mock import patch
 
 import pytest
+from jsonschema import Draft202012Validator
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -42,7 +43,22 @@ def test_review_resume_convert_replace_and_compare_through_mcp(tmp_path):
                 legacy = {'source_activity_ids': [71], 'blocks': [{'label': 'Press',
                     'evidence': {'source': 'user', 'text': 'Synthetic report', 'note_ids': [note['note_id']]},
                     'efforts': [{'exercise': 'Synthetic press', 'exercise_key': 'synthetic_press',
-                        'reps': 6, 'reps_basis': 'total', 'evidence': 'Synthetic report'}]}]}
+                        'reps': 6, 'reps_basis': 'total', 'evidence': 'Synthetic report',
+                        'load': {'kg': 12, 'basis': 'total_external'},
+                        'provenance': {'load': {'source': 'user', 'text': 'Synthetic report', 'note_ids': [note['note_id']]}}}]}]}
+                exposed = {tool.name: tool for tool in (await session.list_tools()).tools}
+                from afterset.server import create_server
+                typed = create_server()._tool_manager.get_tool('propose_workout').parameters
+                malformed = copy.deepcopy(legacy)
+                malformed['blocks'][0]['efforts'][0]['load'] = {'value': 12, 'unit': 'kg', 'basis': 'total'}
+                malformed_args = {'activity_id': 71, 'note_id': note['note_id'], 'workout': malformed,
+                                  'explanation': 'Synthetic reconstruction', 'expected_revision': 0}
+                assert not list(Draft202012Validator(exposed['propose_workout'].inputSchema).iter_errors(malformed_args))
+                assert list(Draft202012Validator(typed).iter_errors(malformed_args))
+                rejected = await session.call_tool('propose_workout', malformed_args)
+                assert rejected.isError and '"kg": 12' in str(rejected.content)
+                assert (await call('list_workout_proposals', {'activity_id': 71}))['total'] == 0
+                assert (await call('get_workout', {'activity_id': 71}))['revision'] == 0
                 invalid = copy.deepcopy(legacy)
                 invalid['blocks'][0]['kind'] = 'private-invalid-kind'
                 invalid['blocks'][0]['private-secret-key'] = 'private-secret-value'
@@ -56,6 +72,9 @@ def test_review_resume_convert_replace_and_compare_through_mcp(tmp_path):
                 proposal = await call('propose_workout', {'activity_id': 71, 'note_id': note['note_id'],
                     'workout': legacy, 'explanation': 'Synthetic reconstruction', 'expected_revision': 0,
                     'request_key': 'draft-first'})
+                assert proposal['workout']['blocks'][0]['efforts'][0]['load']['kg'] == 12
+                assert proposal['workout']['blocks'][0]['efforts'][0]['provenance']['load']['source'] == 'user'
+                assert (await call('get_workout', {'activity_id': 71}))['revision'] == 0
                 applied = await call('apply_proposal', {'proposal_id': proposal['proposal_id']})
                 status = await call('get_proposal', {'proposal_id': proposal['proposal_id']})
                 assert status['lifecycle'] == 'applied'
@@ -74,6 +93,13 @@ def test_review_resume_convert_replace_and_compare_through_mcp(tmp_path):
                     'target_id': replacement['id'], 'replacement': replacement,
                     'expected_fingerprint': draft['fingerprint'], 'evidence_note_id': correction_note['note_id'],
                     'request_key': 'replace-first'}
+                bad_arguments = copy.deepcopy(arguments)
+                bad_arguments['replacement']['load'] = {'value': 12, 'unit': 'kg', 'basis': 'total'}
+                assert not list(Draft202012Validator(exposed['revise_workout_proposal'].inputSchema).iter_errors(bad_arguments))
+                assert list(Draft202012Validator(create_server()._tool_manager.get_tool('revise_workout_proposal').parameters).iter_errors(bad_arguments))
+                rejected = await session.call_tool('revise_workout_proposal', bad_arguments)
+                assert rejected.isError and '"kg": 12' in str(rejected.content)
+                assert (await call('get_proposal', {'proposal_id': draft['proposal_id']}))['lifecycle'] == 'draft'
                 bad_arguments = copy.deepcopy(arguments)
                 bad_arguments['replacement']['kind'] = 'private-invalid-kind'
                 rejected = await session.call_tool('revise_workout_proposal', bad_arguments)

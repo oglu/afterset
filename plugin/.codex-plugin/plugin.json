@@ -1,21 +1,21 @@
 {
   "name": "afterset",
-  "version": "0.3.0",
-  "description": "Personal Garmin training, sleep analysis, and reviewable exercise corrections.",
+  "version": "0.4.0",
+  "description": "Personal Garmin training, sleep, recovery, and reviewable workout reconstruction.",
   "license": "AGPL-3.0-or-later",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Afterset",
     "shortDescription": "Your training and sleep records",
-    "longDescription": "Sync Garmin, review and correct exercise sets, and explore training and recovery using your local Afterset database.",
+    "longDescription": "Explore personal Garmin training and recovery, and reconstruct workouts for review using your Afterset database.",
     "capabilities": [
       "Read",
       "Write"
     ],
     "defaultPrompt": [
       "Review my recent training and sleep.",
-      "Help me correct a recorded strength session."
+      "Let’s review and record my training session."
     ]
   }
 }

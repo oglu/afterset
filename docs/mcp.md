@@ -34,10 +34,11 @@ Binding beyond loopback requires one authentication mode and a public endpoint U
 | `save_session_note` | Preserve session descriptions and subjective recovery feedback |
 | `save_personal_context` | Save illness, injuries, life events and personal explanations in a separate database |
 | `get_personal_context` | Explicit analysis-only, paginated read of overlapping personal events (up to 366 days) |
-| `apply_proposal` | Apply a reviewed draft, rejecting stale edits |
+| `apply_proposal` | Apply a reviewed draft and return its saved workout and review diagnostics |
 | `restore_exercise_sets` | Restore an earlier revision; 0 selects raw Garmin |
 | `start_garmin_sync` | Start a persisted background sync job |
 | `start_activity_enrichment` | Fetch selected detail for up to 50 existing activities |
+| `sync_overview` | Read active jobs and recent overlapping date-range attempts |
 | `sync_status` | Check progress, completion and partial failures |
 
 Garmin measurements and exercise notes stay in training. Personal illness, life
@@ -97,6 +98,31 @@ original result without creating another note or draft. Reusing it with differen
 input fails. A new observation needs a new key, even if its words match an earlier
 note. Applying the same proposal again returns its original saved revision.
 
+The review flags known weights with unknown load basis, per-hand loads with an
+unknown implement count, plates-per-side loads with unknown bar mass, and certain
+unit-labelled numeric values left in auxiliary details. It also checks repetition
+conventions and recorded count conflicts. These flags do not fill in missing values
+or reject an otherwise valid draft. They are bounded; counts indicate when a list
+is truncated. No flags does not establish that every described exercise or value
+was recorded. The assistant compares the proposal with your description and shows
+material unknowns before you approve it.
+
+`apply_proposal` returns `saved_workout`, a bounded view built from the applied
+snapshot, along with bounded projections of the proposal's stored unresolved fields
+and conflicts. Arbitrary conflict bodies are omitted; use `get_proposal` with
+`include_workout=true` for the full review. It shows
+at most 20 blocks, 50 efforts and 10 links per effort. Counts and `truncated` expose
+row and link omissions. The receipt always omits some fields, including drop sets
+and auxiliary details, even when `truncated=false`. Use
+`get_workout(revision=applied_revision)` to verify any requested fact it does not
+show or to read the full saved snapshot.
+A retry returns the original applied revision even if a later revision is current.
+If a legacy applied revision has no structured snapshot, `saved_workout` is null
+and `saved_workout_available` is false. Legacy review diagnostics may also be null.
+For auxiliary power, diagnostics list schema-specific measured, reported and target
+fields; the source category must be established separately. Very large diagnostic values can
+be omitted from the bounded response and remain in the full workout details.
+
 The assistant checks recorded counts before asking you to recall them and groups
 related questions together. Unknown nonessential fields can remain unknown. Once
 you approve an unchanged draft, it can be applied without asking again; a changed
@@ -104,6 +130,13 @@ draft needs another review. Requested training advice stays separate from record
 and is never saved as factual workout data.
 
 ## Editing a draft and comparing sessions
+
+Later comparisons use the saved effective workouts and relevant session notes. The
+original recording remains available, but its exercise labels do not replace a
+reviewed reconstruction. A missing or unmatched exercise is a gap in the record,
+not proof it was not performed. Report ranges as ranges and preserve their sources
+and execution conditions. Whole-session or shared-interval heart rate does not
+identify individual station timing or heart rate.
 
 Use `get_workout(target_schema_version=3)` for an explicit converted review
 document before editing a version-2 session. Saved history does not change.
@@ -129,6 +162,43 @@ These coordinates are internal. A changed load can remain the same movement;
 different assistance or unknown conditions limit what can be concluded. Numeric
 differences require compatible measurement conventions. Shared source activities
 are reported so overlapping sessions are not counted twice.
+
+## Finding fresh records
+
+For personal training and recovery questions, the assistant can retrieve relevant
+records and start a targeted sync if needed. It respects requests to use cached
+data only or not to sync. A request to discuss without saving does not authorize
+notes, drafts or applied changes. A notes-only request saves the requested note
+without creating a structured proposal. General fitness questions do not require a
+personal-data read.
+
+`sync_overview(start, end, scope)` is read-only. It returns active jobs and up to
+100 recent date-range attempts overlapping the requested dates and scope. A
+`covers_range` flag describes the requested range, not guaranteed measurements.
+A truncated response means older attempts may be absent. `sync_status(job_id)`
+shows an individual job's request, progress and outcome. Active enrichment jobs
+include their activity IDs and kinds. Job timestamps are UTC. A completed job can
+still leave unavailable fields; partial, failed and interrupted jobs are not a
+successful complete attempt. `enrichment_status` separates retained payload times
+from latest fetch outcomes, including unsupported and failed attempts.
+
+The assistant treats a completed covering attempt as fresh for one hour for today
+and the previous two days, for 24 hours for days 3–30, and for older dates only
+when it completed after the requested date ended in the configured timezone. It assesses each requested day separately, combines evidence from separate successful
+jobs, and coalesces only missing or stale days into
+needed ranges of at most 31 days, and applies the same age rules to retained activity
+detail. A compatible date-range job must cover the needed dates and scope; activity
+detail, splits or samples also require `enrich=true`. A compatible enrichment job
+must cover the needed activities and kinds, and use `refresh=true` when retained
+required data is stale. The assistant waits for incompatible jobs, then starts the
+needed sync. It checks once after a start races with another job, then reports
+contention if no active job is visible. It polls at most six times, at least ten seconds
+apart, and reports a job still running rather than claiming completion. After a job
+terminates it checks required payload timestamps and outcomes,
+reads the resulting records and reports material gaps. It
+stops after a failed or partial attempt, and respects rate limiting rather than
+retrying in a loop. Freshness cannot guarantee every measurement is available.
+Read tools do not start syncs, and sync never writes to Garmin.
 
 ## Activity enrichment and signal coverage
 

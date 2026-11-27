@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import json
+import math
 import sqlite3
 from typing import Any, Literal
 
@@ -108,7 +109,9 @@ def _compact_workout(document: dict) -> dict:
                           if key in ('variant', 'equipment', 'back_support', 'failure',
                                      'pause', 'pauses', 'range_of_motion')
                           and (isinstance(item, bool) or item is None
-                               or isinstance(item, str) and len(item) <= 500)}
+                               or isinstance(item, str) and len(item) <= 500
+                               or isinstance(item, int) and item.bit_length() <= 128
+                               or isinstance(item, float) and math.isfinite(item))}
             if conditions:
                 result['comparison_conditions'] = conditions
         return result

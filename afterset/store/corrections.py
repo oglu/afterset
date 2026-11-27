@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 from typing import Any, Literal
 from uuid import uuid4
@@ -82,6 +83,51 @@ def _review_changes(conn: sqlite3.Connection, before: dict, after: dict, note_id
             if reps is not None and effort.get('reps_basis', 'unknown') == 'unknown':
                 unresolved.append({'kind': 'unknown_reps_basis', 'block_index': bi, 'effort_index': ei})
                 unresolved_efforts.add((bi, ei))
+            load = effort.get('load') or {}
+            if load.get('kg') is not None and load.get('basis', 'unknown') == 'unknown':
+                unresolved.append({'kind': 'unknown_load_basis', 'block_index': bi, 'effort_index': ei})
+                unresolved_efforts.add((bi, ei))
+            if load.get('kg') is not None and load.get('basis') == 'per_hand' and load.get('implement_count') is None:
+                unresolved.append({'kind': 'unknown_implement_count', 'block_index': bi, 'effort_index': ei})
+                unresolved_efforts.add((bi, ei))
+            if load.get('kg') is not None and load.get('basis') == 'plates_per_side' and load.get('bar_kg') is None:
+                unresolved.append({'kind': 'unknown_bar_mass', 'block_index': bi, 'effort_index': ei})
+                unresolved_efforts.add((bi, ei))
+            # Recognize only canonical unit-labelled numeric keys, not arbitrary prose.
+            details = effort.get('details') or {}
+            for key, target in (('reps', 'reps'), ('distance_meters', 'distance_meters'),
+                                ('duration_seconds', 'duration_seconds'), ('load_kg', 'load.kg'),
+                                ('power_watts', 'power_watts')):
+                value = details.get(key)
+                if (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0
+                        or isinstance(value, float) and not math.isfinite(value)):
+                    continue
+                if key == 'reps' and not isinstance(value, int):
+                    continue
+                if key == 'load_kg':
+                    missing = load.get('kg') is None
+                elif key == 'power_watts':
+                    missing = (effort.get('power_watts') is None and all(
+                        (effort.get(section) or {}).get('power_watts') is None
+                        for section in ('measured', 'reported', 'targets')))
+                else:
+                    missing = effort.get(key) is None
+                if missing:
+                    diagnostic = {'kind': 'auxiliary_structured_value', 'block_index': bi,
+                                  'effort_index': ei, 'details_key': key}
+                    if key == 'power_watts':
+                        diagnostic['candidate_targets'] = [
+                            'measured.power_watts' if after.get('schema_version', 2) == 3 else 'power_watts',
+                            'reported.power_watts', 'targets.power_watts']
+                        diagnostic['source_unresolved'] = True
+                    else:
+                        diagnostic['target'] = target
+                    if isinstance(value, int) and value.bit_length() > 128:
+                        diagnostic['value_omitted'] = True
+                    else:
+                        diagnostic['value'] = value
+                    unresolved.append(diagnostic)
+                    unresolved_efforts.add((bi, ei))
             for ref in effort.get('segments', []):
                 aid = ref['activity_id']
                 if aid not in recordings:
@@ -203,6 +249,97 @@ def _revision(conn: sqlite3.Connection, activity_id: int, parent: int, payload: 
     return revision
 
 
+def _saved_workout_receipt(document: dict) -> dict:
+    """Bound the receipt; full historical content remains available via get_workout."""
+    blocks = document['blocks']
+    total_efforts = sum(len(block['efforts']) for block in blocks)
+    total_links = sum(len(effort.get('segments', [])) for block in blocks for effort in block['efforts'])
+    remaining = 50
+    shown_links = 0
+    projected = []
+    for block in blocks[:20]:
+        efforts = []
+        for effort in block['efforts'][:remaining]:
+            entry = {key: effort.get(key) for key in ('exercise', 'exercise_key', 'round', 'kind',
+                     'reps', 'reps_basis', 'load', 'distance_meters', 'duration_seconds',
+                     'power_watts', 'measured', 'reported', 'targets', 'assistance') if key in effort}
+            entry['segments'] = effort.get('segments', [])[:10]
+            shown_links += len(entry['segments'])
+            sources = effort.get('provenance') or {}
+            entry['field_sources'] = {key: sources[key]['source'] for key in (
+                'exercise', 'round', 'reps', 'load', 'distance_meters', 'duration_seconds',
+                'power_watts', 'measured.power_watts', 'reported.power_watts', 'targets.power_watts',
+                'measured.speed_meters_per_second', 'reported.speed_meters_per_second', 'targets.speed_meters_per_second')
+                if key in sources}
+            efforts.append(entry)
+        remaining -= len(efforts)
+        fmt = block.get('format')
+        if fmt is not None:
+            fmt = {key: fmt.get(key) for key in ('time_cap_seconds', 'interval_seconds', 'rounds_completed', 'extra_reps')} | {
+                'field_sources': {key: value['source'] for key, value in (fmt.get('provenance') or {}).items()}}
+        projected.append({'kind': block['kind'], 'label': block['label'], 'format': fmt,
+                          'efforts': efforts, 'effort_count': len(block['efforts'])})
+    shown_efforts = sum(len(block['efforts']) for block in projected)
+    return {'schema_version': document.get('schema_version'), 'source_activity_ids': document['source_activity_ids'],
+            'blocks': projected, 'block_count': len(blocks), 'effort_count': total_efforts,
+            'segment_link_count': total_links, 'shown_segment_link_count': shown_links,
+            'projection_complete': False,
+            'omitted_fields': ['drop_sets', 'details', 'evidence', 'warnings', 'conflicts'],
+            'truncated': len(projected) < len(blocks) or shown_efforts < total_efforts or shown_links < total_links}
+
+
+def _receipt_conflict(conflict: Any) -> dict[str, Any]:
+    """Expose bounded identifiers; arbitrary conflict payload stays in the full review."""
+    if not isinstance(conflict, dict):
+        return {'details_omitted': True}
+    result = {'details_omitted': True}
+    for key in ('kind', 'effort_id', 'metric', 'status'):
+        value = conflict.get(key)
+        if isinstance(value, str):
+            result[key] = value[:200]
+    for key in ('block_index', 'effort_index'):
+        value = conflict.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value.bit_length() <= 63:
+            result[key] = value
+    return result
+
+
+def _receipt_unresolved(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {'details_omitted': True}
+    result = _receipt_conflict(item)
+    for key in ('details_key', 'target'):
+        value = item.get(key)
+        if isinstance(value, str):
+            result[key] = value[:200]
+    if item.get('kind') == 'document_conflict':
+        result['conflict'] = _receipt_conflict(item.get('conflict'))
+    for key in ('source_unresolved', 'value_omitted'):
+        if isinstance(item.get(key), bool):
+            result[key] = item[key]
+    value = item.get('value')
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and (not isinstance(value, int) or value.bit_length() <= 128) and (not isinstance(value, float) or math.isfinite(value)):
+        result['value'] = value
+    if item.get('candidate_targets'):
+        result['candidate_targets'] = [v[:200] for v in item['candidate_targets'][:3] if isinstance(v, str)]
+    return result
+
+
+def _applied_receipt(conn: sqlite3.Connection, proposal: sqlite3.Row, already_applied: bool) -> dict[str, Any]:
+    revision = proposal['applied_revision']
+    row = conn.execute('SELECT document_json FROM workout_versions WHERE activity_id=? AND revision_id=?',
+                       (proposal['activity_id'], revision)).fetchone()
+    saved = _saved_workout_receipt(json.loads(row['document_json'])) if row else None
+    review = conn.execute('SELECT review_json FROM proposal_reviews WHERE proposal_id=?', (proposal['proposal_id'],)).fetchone()
+    diagnostics = json.loads(review['review_json']) if review else None
+    return {**_proposal_status(conn, proposal), 'revision': revision, 'already_applied': already_applied,
+            'saved_workout': saved, 'saved_workout_available': saved is not None,
+            'unresolved_fields': [_receipt_unresolved(item) for item in diagnostics['unresolved_fields'][:100]] if diagnostics else None,
+            'unresolved_count': diagnostics['unresolved_count'] if diagnostics else None,
+            'conflicts': [_receipt_conflict(item) for item in diagnostics['conflicts'][:100]] if diagnostics else None,
+            'conflict_count': diagnostics['conflict_count'] if diagnostics else None}
+
+
 def apply_proposal(proposal_id: str) -> dict[str, Any]:
     with connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
@@ -210,7 +347,7 @@ def apply_proposal(proposal_id: str) -> dict[str, Any]:
         if not proposal:
             raise ValueError('Unknown proposal')
         if proposal['applied_revision'] is not None:
-            return {**_proposal_status(conn, proposal), 'revision': proposal['applied_revision'], 'already_applied': True}
+            return _applied_receipt(conn, proposal, True)
         if conn.execute('SELECT 1 FROM proposal_successors WHERE proposal_id=?', (proposal_id,)).fetchone():
             raise ValueError('Proposal was superseded; review the successor')
         if head(conn, proposal['activity_id']) != proposal['base_revision']:
@@ -222,7 +359,7 @@ def apply_proposal(proposal_id: str) -> dict[str, Any]:
         revision = _revision(conn, proposal['activity_id'], proposal['base_revision'], proposal['sets_json'], f"Proposal {proposal_id}: {proposal['explanation']}", workout, legacy_format_notes=legacy)
         conn.execute('UPDATE set_proposals SET applied_revision=? WHERE proposal_id=?', (revision, proposal_id))
         proposal = conn.execute('SELECT * FROM set_proposals WHERE proposal_id=?', (proposal_id,)).fetchone()
-        result = {**_proposal_status(conn, proposal), 'revision': revision, 'already_applied': False}
+        result = _applied_receipt(conn, proposal, False)
     return result
 
 

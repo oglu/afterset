@@ -13,7 +13,7 @@ COPY --from=builder /tmp/afterset-source.tar.gz /usr/share/doc/afterset/source.t
 COPY LICENSE /usr/share/doc/afterset/LICENSE
 LABEL org.opencontainers.image.title="Afterset" \
     org.opencontainers.image.description="Personal Garmin training, sleep and recovery MCP server" \
-    org.opencontainers.image.version="0.3.0" \
+    org.opencontainers.image.version="0.4.0" \
     org.opencontainers.image.licenses="AGPL-3.0-or-later"
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

@@ -73,7 +73,19 @@ do not rewrite correction history. `recording_changed_since_revision` flags a
 changed source; `get_workout(include_recording_payload=true)` retrieves the frozen
 interval payloads for inspection. `get_workout(revision=...)` reads history.
 
-## Review and apply corrections
+## Review and save a workout
+
+A wearable recording can be accurate but omit the exercises you performed. Your
+assistant can combine it with your account to draft a structured workout. Work
+during a watch rest interval and uncertain exercise timing can remain visible
+without rewriting the original recording.
+
+Compare the draft with your description before approval. A valid draft may still
+have unknown values or missing exercises. Review diagnostics flag some load and
+repetition convention gaps and some numeric values left in auxiliary details; they
+do not detect every omission. The bounded save receipt shows the applied workout and any
+stored review diagnostics. It marks truncation; the full saved revision remains
+available through `get_workout`. Older applied revisions may lack a structured snapshot.
 
 Use `propose_workout` to draft a reconstruction, review it, then call
 `apply_proposal`. Explicitly excluded whole recording intervals can reduce

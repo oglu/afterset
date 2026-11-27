@@ -11,11 +11,15 @@ end up explaining your training again whenever you want to plan.
 Afterset syncs your Garmin workouts, sleep and recovery data to a database you
 own, and makes it available to your assistant through MCP.
 
+When you ask about your training or recovery, the assistant can retrieve relevant
+records and sync missing or stale data. You can request cached data only, no sync,
+or a discussion without saving. Tool selection depends on your connected assistant.
+
 After training, you tell your assistant what you actually did. It uses your
-description and the recorded set timings to put together a corrected session for
-you to check and approve. Afterset keeps the original recording, the corrections
-and your notes on how you felt. Your assistant can use all of it the next time
-you discuss your training.
+description and the wearable recording to reconstruct the session for you to
+check and approve. This can add exercises and structure even when the watch
+recording is accurate. Afterset keeps the original recording, the reviewed
+workout and your notes on how you felt for later conversations.
 
 ## What you can do
 
@@ -24,8 +28,7 @@ you discuss your training.
   Per-hand loads and reps per leg stay explicit. Each value is tagged by its
   source: you, the watch or inference. See [structured workouts](docs/workouts.md).
 - **Ask about training in context.** "How did last week's load compare with my
-  sleep and HRV?" Your assistant gets a week of workouts, notes, sleep and HRV in
-  one call.
+  sleep and HRV?" Your assistant can retrieve workouts, notes, sleep and HRV together.
 - **Keep how it felt.** Session notes, fatigue and RPE sit next to the numbers, so
   a plan can account for more than heart rate.
 - **Explain the dips.** Tell your assistant you were ill or travelling, and it

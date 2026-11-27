@@ -3,6 +3,19 @@
 This file lists notable changes in each release. Versions match the
 `ghcr.io/oglu/afterset` image tags.
 
+## 0.4.0 — workout reconstruction and conversation workflows
+
+- Help assistants retrieve personal training records and use targeted sync when
+  needed, while respecting requests to avoid syncing or saving. Inspect active
+  jobs and scoped sync attempts without starting a fetch.
+- Reconstruct wearable-backed workouts from your description, even when the watch
+  recording is accurate but lacks exercise structure. Review load conventions,
+  unresolved values and a bounded receipt from the saved revision.
+- Preserve numeric execution conditions in compact workout views and keep
+  uncertainty, sources and shared recording links visible for later comparisons.
+- Add an opt-in synthetic Codex conversation evaluator with isolated test records,
+  a fake Garmin backend and separate deterministic checks and semantic review.
+
 ## 0.3.0 — workout history and comparisons
 
 - Publish an optional latest Docker tag for stable releases without allowing older

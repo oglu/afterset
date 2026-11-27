@@ -44,6 +44,32 @@ def job_status(job_id: str) -> dict[str, Any]:
     return result
 
 
+def sync_overview(start: str, end: str, scope: Literal['activities', 'wellness']) -> dict[str, Any]:
+    """Read active jobs and recent overlapping date-range attempts; never start a sync."""
+    store.date_range(start, end, 31)
+    if scope not in ('activities', 'wellness'):
+        raise ValueError('scope must be activities or wellness')
+    with store.connect() as conn:
+        rows = conn.execute("""SELECT * FROM sync_jobs
+            WHERE state IN ('queued', 'running') OR (
+                json_extract(request_json, '$.scope') = ?
+                AND json_extract(request_json, '$.start') <= ?
+                AND json_extract(request_json, '$.end') >= ?)
+            ORDER BY CASE WHEN state IN ('queued', 'running') THEN 0 ELSE 1 END, created_at DESC, rowid DESC LIMIT 101""", (scope, end, start)).fetchall()
+    jobs = []
+    for row in rows[:100]:
+        job = dict(row)
+        request = json.loads(job.pop('request_json'))
+        job['request'] = request
+        job['progress'] = json.loads(job.pop('progress_json'))
+        job['covers_range'] = bool(request.get('scope') == scope and request.get('start')
+                                   and request.get('end') and request['start'] <= start and request['end'] >= end)
+        jobs.append(job)
+    return {'start': start, 'end': end, 'scope': scope, 'jobs': jobs, 'truncated': len(rows) > 100,
+            'note': 'A completed covering date-range job is an attempt, not proof every measurement exists. '
+                    'Partial, failed and interrupted jobs are not complete coverage. Timestamps are UTC.'}
+
+
 def _update(job_id: str, state: str, progress: dict) -> None:
     with store.connect() as conn:
         conn.execute('UPDATE sync_jobs SET state=?,progress_json=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?', (state, json.dumps(progress), job_id))

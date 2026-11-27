@@ -1,5 +1,12 @@
 # Syncing and analysis
 
+For a personal training or recovery question, your assistant can retrieve the
+relevant records and sync missing or stale data. You can ask it to use cached data
+only, avoid syncing, or discuss a session without saving. The assistant should
+report unavailable data and sync failures. General questions do not require it to
+read your records. See [freshness and sync jobs](mcp.md#finding-fresh-records).
+
+
 [Documentation](README.md) · [Project overview](../README.md)
 
 Run these commands from the checkout root. Complete [Garmin login](configuration.md#garmin-authentication) first.

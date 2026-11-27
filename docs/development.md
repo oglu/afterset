@@ -68,3 +68,56 @@ reliably identify private details in images.
 
 Publishing a stable GitHub Release runs these checks again before building the
 image and attaching release artifacts. See [Publishing](maintainers/publishing.md).
+
+## Synthetic Codex conversation evaluation
+
+The optional Codex conversation evaluator uses fabricated data and a fake Garmin
+sync. It runs separate in-memory Codex threads against the current local MCP
+server metadata. It does not exercise ChatGPT discovery or the hosted connection.
+It can incur model cost. Run the normal offline pytest suite without enabling it.
+
+Install a supported `codex-cli 0.165.0` and authenticate Codex normally. From the
+checkout root, use an explicit case, model and new report path:
+
+```sh
+uv run python -m scripts.conversation_eval.runner --live --case english --model MODEL_NAME --repeat 1 --output /tmp/afterset-eval-report.json
+```
+
+Omit `--repeat 1` to run the selected case three times. Each case is bounded to
+three repetitions and each operation has a timeout. Other case names appear in
+`--help`. The model sees the case's user messages and synthetic MCP tools;
+scenario assertions remain in the external observer. The validated Codex
+configuration can still expose limited built-in code host primitives, including
+patch, clock and MCP resource operations. The thread has no environment access
+and uses read-only sandboxing. Only the randomly named synthetic MCP server has
+automatic tool approval. The runner rejects other approval requests.
+
+The runner uses a fresh thread and temporary synthetic database for each run.
+The synthetic MCP server has no Garmin account or network access. The app-server
+process needs network access to the selected model provider. It disables shell,
+browser, app and other configured MCP surfaces, then checks the effective thread
+settings and MCP inventory. It refuses to score if the app-server and server
+traces disagree. The tester may still see built-in tool definitions; these
+controls are not an operating-system filesystem isolation guarantee. The runner
+rejects unknown completed item types and checks synthetic MCP calls against the
+observer trace. Do not use this evaluation with real records or credentials as
+fixtures.
+
+The report includes the model and Codex version, metadata hashes, synthetic tool
+calls and responses, database snapshots and automated checks. A successful automated
+check is not a semantic review of the assistant's answer. Review every transcript
+for truthful reporting, complete review before approval, correct interpretation,
+and unnecessary questions. The runner starts a fresh thread for later recall and
+withholds approval if its conservative draft gate fails. A failure to initialize or
+verify isolation is reported as unverified, not a passed case. A separate manual
+protocol covers hosted ChatGPT and remains necessary after an authorized deployment:
+[conversation baseline protocol](../tests/conversation_baseline/README.md).
+
+Automated cases currently cover English and Greek dated retrieval, a general
+question, an ambiguous opener, explicit no-use, cached-only and no-save boundaries,
+a notes-only request, missing/partial/authentication sync outcomes, and reviewed
+reconstruction followed by a fresh-thread comparison. The evaluator records whether
+it could run each check; it does not automatically grade all wording, authorization
+nuances, comparison interpretations, or every case in the hosted manual matrix.
+An infrastructure error or unverified isolation stops that run and returns a nonzero
+exit code. A deterministic case failure also returns a nonzero exit code.
